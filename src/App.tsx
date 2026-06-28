@@ -38,7 +38,7 @@ const DEMO_DEFECT_LOGS: DefectLog[] = [
     name: "리튬 이온 배터리 팩",
     qty: 2,
     defectType: "파손",
-    manager: "김민수",
+    manager: "김민수 대리",
     note: "파레트 하차 중 낙하하여 배터리 케이스 균열 발생",
     actionTaken: "즉시 안전 폐기 대기 구역으로 이동 조치함"
   },
@@ -48,7 +48,7 @@ const DEMO_DEFECT_LOGS: DefectLog[] = [
     name: "고주파 동축 케이블 (5m)",
     qty: 5,
     defectType: "오염",
-    manager: "박영희",
+    manager: "박영희 과장",
     note: "박스 내부 습기 침투로 인해 커넥터 접촉부 부식 발생",
     actionTaken: "불량 케이블 전량 반품 및 공급사 교환 요청 접수"
   },
@@ -58,7 +58,7 @@ const DEMO_DEFECT_LOGS: DefectLog[] = [
     name: "LED 디스플레이 모듈 7형",
     qty: 1,
     defectType: "기능 오작동",
-    manager: "이준우",
+    manager: "이준우 주임",
     note: "전원 인가 시 화면 일부 픽셀 깨짐 및 세로줄 노이즈 발생",
     actionTaken: "제조사 무상 AS 의뢰 접수 및 대체품 교체 완료"
   }
@@ -71,7 +71,7 @@ const DEMO_RENT_LOGS: RentLog[] = [
     name: "리튬 이온 배터리 팩",
     type: "대여",
     qty: 3,
-    user: "홍길동",
+    user: "홍길동 대리",
     note: "배터리 팩 방전 테스트 목적 대여"
   },
   {
@@ -80,7 +80,7 @@ const DEMO_RENT_LOGS: RentLog[] = [
     name: "고주파 동축 케이블 (5m)",
     type: "반납",
     qty: 2,
-    user: "이영희",
+    user: "이영희 사원",
     note: "부서 테스트 장비 사용 완료 후 정상 반납"
   }
 ];

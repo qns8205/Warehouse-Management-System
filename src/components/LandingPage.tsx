@@ -776,7 +776,7 @@ function getInventoryData(sheet) {
       photo: photoUrl,
       name: String(row[2] || "").trim(),
       link: itemLink,
-      stock: row[4] === "" ? null : Number(row[4]),
+      stock: (row[4] === "" || isNaN(Number(row[4]))) ? null : Number(row[4]),
       updatedAt: row[5] ? (row[5] instanceof Date ? formatDate(row[5]) : String(row[5])) : "",
       manager: String(row[6] || "").trim(),
       note: String(row[7] || "").trim(),
