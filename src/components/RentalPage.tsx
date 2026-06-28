@@ -244,7 +244,7 @@ export default function RentalPage({
                 <User size={16} style={{ position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)", color: isLightMode ? "#94a3b8" : "#64748b" }} />
                 <input
                   type="text"
-                  placeholder="예: 홍길동 대리"
+                  placeholder="예: 홍길동"
                   value={rentUser}
                   onChange={(e) => setRentUser(e.target.value)}
                   style={{
