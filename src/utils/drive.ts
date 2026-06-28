@@ -11,7 +11,7 @@ export function getGoogleDriveImageUrl(url: string | undefined | null): string {
 
   // If it's a raw Drive file ID (usually ~33 characters long)
   if (/^[a-zA-Z0-9_-]{25,100}$/.test(trimmed)) {
-    return `https://lh3.googleusercontent.com/d/${trimmed}`;
+    return `https://drive.google.com/thumbnail?sz=w600&id=${trimmed}`;
   }
 
   // If it is a Drive or Docs URL, let's extract the ID
@@ -19,18 +19,18 @@ export function getGoogleDriveImageUrl(url: string | undefined | null): string {
     // 1. Check for /d/ID
     const dMatch = trimmed.match(/\/d\/([a-zA-Z0-9_-]{25,100})/);
     if (dMatch && dMatch[1]) {
-      return `https://lh3.googleusercontent.com/d/${dMatch[1]}`;
+      return `https://drive.google.com/thumbnail?sz=w600&id=${dMatch[1]}`;
     }
     // 2. Check for id=ID query param
     const idMatch = trimmed.match(/[?&]id=([a-zA-Z0-9_-]{25,100})/);
     if (idMatch && idMatch[1]) {
-      return `https://lh3.googleusercontent.com/d/${idMatch[1]}`;
+      return `https://drive.google.com/thumbnail?sz=w600&id=${idMatch[1]}`;
     }
     // 3. Fallback: search for any 25-100 character ID in the URL path
     const parts = trimmed.split(/[\/?&]/);
     for (const part of parts) {
       if (/^[a-zA-Z0-9_-]{25,100}$/.test(part) && !part.includes("google") && part !== "open" && part !== "view") {
-        return `https://lh3.googleusercontent.com/d/${part}`;
+        return `https://drive.google.com/thumbnail?sz=w600&id=${part}`;
       }
     }
   }

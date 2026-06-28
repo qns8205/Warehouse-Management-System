@@ -149,6 +149,9 @@ export default function LoginPage({
                 placeholder="ID 입력"
                 value={idInput}
                 onChange={(e) => setIdInput(e.target.value)}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck="false"
                 style={{
                   width: "100%",
                   background: isLightMode ? "#f8fafc" : "#0f172a",
@@ -187,6 +190,9 @@ export default function LoginPage({
                 placeholder="비밀번호 입력"
                 value={passwordInput}
                 onChange={(e) => setPasswordInput(e.target.value)}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck="false"
                 style={{
                   width: "100%",
                   background: isLightMode ? "#f8fafc" : "#0f172a",
@@ -202,6 +208,11 @@ export default function LoginPage({
                 onBlur={(e) => (e.target.style.borderColor = isLightMode ? "#cbd5e1" : "#334155")}
               />
             </div>
+          </div>
+
+          <div style={{ fontSize: "11px", color: isLightMode ? "#64748b" : "#94a3b8", display: "flex", justifyContent: "space-between" }}>
+            <span>현재 동기화된 계정 수: <b style={{ color: "#6366f1" }}>{users.length}개</b></span>
+            <span>(기본 계정: admin / 1234)</span>
           </div>
 
           {localError && (
