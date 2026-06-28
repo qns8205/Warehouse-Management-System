@@ -413,49 +413,51 @@ export default function SidePanel({
                               </div>
 
                               {/* Column H note display */}
-                              {item.note ? (
-                                <div
-                                  style={{
-                                    fontSize: "11.5px",
-                                    fontWeight: 500,
-                                    color: TEXT_MAIN,
-                                    marginTop: 4,
-                                    background: "rgba(245, 158, 11, 0.08)",
-                                    border: "1px solid rgba(245, 158, 11, 0.2)",
-                                    padding: "3px 8px",
-                                    borderRadius: 5,
-                                    display: "inline-block",
-                                    maxWidth: "100%",
-                                    wordBreak: "break-all",
-                                  }}
-                                  title={`특이사항: ${item.note}`}
-                                >
-                                  📝 {item.note}
-                                </div>
-                              ) : (
-                                <div style={{ fontSize: "10.5px", color: TEXT_DIM, marginTop: 4, fontStyle: "italic" }}>
-                                  특이사항 없음 (H열)
-                                </div>
-                              )}
+                              <div style={{ display: "block", marginTop: 4 }}>
+                                {item.note ? (
+                                  <div
+                                    style={{
+                                      fontSize: "11.5px",
+                                      fontWeight: 500,
+                                      color: TEXT_MAIN,
+                                      background: "rgba(245, 158, 11, 0.08)",
+                                      border: "1px solid rgba(245, 158, 11, 0.2)",
+                                      padding: "3px 8px",
+                                      borderRadius: 5,
+                                      display: "inline-block",
+                                      maxWidth: "100%",
+                                      wordBreak: "break-all",
+                                    }}
+                                    title={`특이사항: ${item.note}`}
+                                  >
+                                    📝 {item.note}
+                                  </div>
+                                ) : (
+                                  <div style={{ fontSize: "10.5px", color: TEXT_DIM, fontStyle: "italic" }}>
+                                    특이사항 없음
+                                  </div>
+                                )}
+                              </div>
 
                               {item.link && item.link !== "N/A" ? (
-                                <a
-                                  href={item.link}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  style={{
-                                    fontSize: "10.5px",
-                                    color: ACCENT,
-                                    display: "inline-flex",
-                                    alignItems: "center",
-                                    gap: 3,
-                                    marginTop: 6,
-                                    textDecoration: "none",
-                                  }}
-                                >
-                                  구매 링크
-                                  <ExternalLink size={10} />
-                                </a>
+                                <div style={{ display: "block", marginTop: 6 }}>
+                                  <a
+                                    href={item.link}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style={{
+                                      fontSize: "10.5px",
+                                      color: ACCENT,
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: 3,
+                                      textDecoration: "none",
+                                    }}
+                                  >
+                                    구매 링크
+                                    <ExternalLink size={10} />
+                                  </a>
+                                </div>
                               ) : null}
                             </div>
                           </div>

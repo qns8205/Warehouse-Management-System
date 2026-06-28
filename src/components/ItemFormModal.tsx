@@ -238,7 +238,7 @@ export default function ItemFormModal({
             />
           </Field>
 
-          <Field label="특이사항 (Column H)">
+          <Field label="특이사항">
             <input
               value={form.note}
               onChange={(e) => update("note", e.target.value)}

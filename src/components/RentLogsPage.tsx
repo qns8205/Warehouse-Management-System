@@ -356,7 +356,7 @@ export default function RentLogsPage({
               <label style={{ fontSize: 11, fontWeight: 600, color: TEXT_DIM }}>대여자 / 신청자 성함</label>
               <input
                 type="text"
-                placeholder="대여자 이름 입력 (예: 홍길동 과장)"
+                placeholder="대여자 이름 입력 (예: 홍길동)"
                 value={userInput}
                 onChange={(e) => setUserInput(e.target.value)}
                 style={{
