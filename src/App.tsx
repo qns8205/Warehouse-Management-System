@@ -29,7 +29,7 @@ import {
   Moon,
 } from "lucide-react";
 
-const DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwc5YXabteLtTakGJqNo74AHD_AchtBw1bLlXEBiwmyk7CVdKsesrqSx8FZMOM1LrhuYQ/exec";
+const DEFAULT_SCRIPT_URL = (import.meta as any).env?.VITE_SCRIPT_URL || "https://script.google.com/macros/s/AKfycbwc5YXabteLtTakGJqNo74AHD_AchtBw1bLlXEBiwmyk7CVdKsesrqSx8FZMOM1LrhuYQ/exec";
 
 const DEMO_DEFECT_LOGS: DefectLog[] = [
   {
