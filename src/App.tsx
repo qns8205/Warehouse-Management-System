@@ -134,8 +134,25 @@ export default function App() {
   const [selectedRackId, setSelectedRackId] = useState<string | null>(null);
 
   // 구글 Apps Script 연동 상태 (로컬 스토리지 보존으로 새로고침해도 자동복구)
-  const [scriptUrl, setScriptUrl] = useState(() => localStorage.getItem("wms_script_url") || DEFAULT_SCRIPT_URL);
+  const [scriptUrl, setScriptUrl] = useState(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const queryUrl = params.get("script_url");
+      if (queryUrl) {
+        localStorage.setItem("wms_script_url", queryUrl);
+        localStorage.setItem("wms_connected", "true");
+        return queryUrl;
+      }
+    }
+    return localStorage.getItem("wms_script_url") || DEFAULT_SCRIPT_URL;
+  });
   const [connected, setConnected] = useState(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("script_url")) {
+        return true;
+      }
+    }
     const savedConnected = localStorage.getItem("wms_connected");
     if (savedConnected === null) {
       return true; // 기본값 연동 활성화
@@ -205,6 +222,26 @@ export default function App() {
 
   // 4. 초기 레이아웃 복원
   useEffect(() => {
+    // URL에서 script_url 파라미터를 읽어 연동 복원했는지 감지
+    let isRestored = false;
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const queryUrl = params.get("script_url");
+      if (queryUrl) {
+        localStorage.setItem("wms_script_url", queryUrl);
+        localStorage.setItem("wms_connected", "true");
+        isRestored = true;
+        
+        // 주소창에서 파라미터를 제거하여 깔끔하게 세팅
+        try {
+          const cleanUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
+          window.history.replaceState({ path: cleanUrl }, "", cleanUrl);
+        } catch (e) {
+          console.error(e);
+        }
+      }
+    }
+
     if (!localStorage.getItem("wms_script_url")) {
       localStorage.setItem("wms_script_url", scriptUrl);
     }
@@ -212,11 +249,15 @@ export default function App() {
       localStorage.setItem("wms_connected", String(connected));
     }
 
-    // 로컬 스토리지에 캐시된 인벤토리/랙이 있다면 자동 로드
+    if (isRestored) {
+      showToast("🔗 동료로부터 공유받은 구글 스프레드시트 실시간 동기화 링크가 자동 복원되었습니다!", "ok");
+    }
+
+    // 로컬 스토리지에 캐시된 인벤토리/랙이 있다면 자동 로드 (단, 복원 시에는 무시하고 강제 리프레시 유도할 수도 있으나, 아래 silentRefresh가 즉시 실행되므로 그대로 유지)
     const cachedInv = localStorage.getItem("wms_cached_inventory");
     const cachedRacks = localStorage.getItem("wms_cached_racks");
 
-    if (cachedInv && cachedRacks) {
+    if (cachedInv && cachedRacks && !isRestored) {
       try {
         setInventory(JSON.parse(cachedInv));
         setRacks(JSON.parse(cachedRacks));
@@ -315,6 +356,20 @@ export default function App() {
       // 무소음 실패는 무시
     }
   }
+
+  // 10초 주기로 스프레드시트 최신 데이터 실시간 자동 동기화 (기기 간 실시간 싱크 완성)
+  useEffect(() => {
+    if (!connected || !scriptUrl) return;
+
+    // 마운트 시 즉시 한 번 갱신 보장
+    silentRefresh();
+
+    const interval = setInterval(() => {
+      silentRefresh();
+    }, 10000); // 10초 간격 폴링
+
+    return () => clearInterval(interval);
+  }, [connected, scriptUrl]); // eslint-disable-line
 
   // 구글 스프레드시트 데이터와 랙 선반 정보 병합
   function racksFromServerSectors(sectors: any[], inv: InventoryItem[]): Rack[] {
@@ -1346,6 +1401,58 @@ export default function App() {
           )}
         </div>
       </header>
+
+      {/* ===== 실시간 연동/데모 상태 알림 슬림 배너 ===== */}
+      <div
+        style={{
+          background: connected ? "rgba(16, 185, 129, 0.08)" : "rgba(245, 158, 11, 0.12)",
+          borderBottom: connected ? "1px solid rgba(16, 185, 129, 0.25)" : "1px solid rgba(245, 158, 11, 0.35)",
+          padding: "8px 24px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          fontSize: "12px",
+          color: connected ? (isLightMode ? "#047857" : "#34d399") : (isLightMode ? "#b45309" : "#fbbf24"),
+          gap: 12,
+          flexShrink: 0,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 500 }}>
+          {connected ? (
+            <>
+              <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "#10b981", boxShadow: "0 0 8px #10b981" }} />
+              <span>
+                <strong>[실시간 동기화 상태]</strong> 현재 내 구글 스프레드시트({scriptUrl.substring(0, 45)}...)와 연동되어 있습니다. <strong>10초 간격으로 실시간 자동 동기화(자동 새로고침) 중</strong>이며, 다른 사용자 PC에서도 동일하게 내용이 실시간 반영됩니다.
+              </span>
+            </>
+          ) : (
+            <>
+              <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "#f59e0b", boxShadow: "0 0 8px #f59e0b" }} />
+              <span>
+                <strong>[데모용 가상 모드]</strong> 현재 구글 시트와 연동되지 않은 상태입니다. 동료와 실시간 데이터(사용자 계정 포함)를 공유하려면, <strong>[구글 시트 연동]</strong>에서 연동을 완료하고 생성된 <strong>공유 링크</strong>로 동료를 접속하게 하세요!
+              </span>
+            </>
+          )}
+        </div>
+        {!connected && isAdmin && (
+          <button
+            onClick={() => setShowSetup(true)}
+            style={{
+              background: "#f59e0b",
+              color: "#ffffff",
+              border: "none",
+              borderRadius: 4,
+              padding: "4px 10px",
+              fontSize: "11px",
+              fontWeight: 700,
+              cursor: "pointer",
+              boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
+            }}
+          >
+            연동 설정 열기
+          </button>
+        )}
+      </div>
 
       {/* ===== 2. 본문 메인 ===== */}
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>

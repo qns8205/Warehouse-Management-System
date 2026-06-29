@@ -30,6 +30,20 @@ export default function SetupModal({
   onDisconnect,
 }: SetupModalProps) {
   const [copied, setCopied] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
+
+  const handleCopyShareLink = () => {
+    if (!scriptUrl) return;
+    try {
+      const currentOrigin = window.location.origin + window.location.pathname;
+      const shareLink = `${currentOrigin}?script_url=${encodeURIComponent(scriptUrl.trim())}`;
+      navigator.clipboard.writeText(shareLink);
+      setShareCopied(true);
+      setTimeout(() => setShareCopied(false), 2000);
+    } catch (e) {
+      console.error("Failed to copy link:", e);
+    }
+  };
 
   const scriptCode = `// AppsScript_Code.gs
 // 이 코드를 구글 스프레드시트의 [확장 프로그램] -> [Apps Script]에 붙여넣고 웹앱으로 배포하세요.
@@ -559,6 +573,39 @@ function responseJSON(obj) {
             </button>
           )}
         </div>
+
+        {connected && scriptUrl && (
+          <div style={{ marginTop: 20, background: "rgba(99, 102, 241, 0.08)", padding: 14, borderRadius: 10, border: "1px dashed rgba(99, 102, 241, 0.45)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#818cf8", display: "flex", alignItems: "center", gap: 4 }}>
+                  👥 타인/동료 기기 동기화 링크
+                </div>
+                <div style={{ fontSize: 11.5, color: TEXT_DIM, marginTop: 4, lineHeight: 1.5 }}>
+                  다른 사용자가 설정 변경 없이 내 구글 스프레드시트와 실시간 연동된 화면을 보게 하려면 아래 링크를 전달하세요!
+                </div>
+              </div>
+              <button
+                onClick={handleCopyShareLink}
+                style={{
+                  background: shareCopied ? OK : ACCENT,
+                  color: "#ffffff",
+                  border: "none",
+                  borderRadius: 6,
+                  padding: "8px 14px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                  transition: "background 0.2s ease",
+                  boxShadow: "0 2px 4px rgba(0, 0, 0, 0.15)",
+                }}
+              >
+                {shareCopied ? "✓ 링크 복사 완료" : "공유 링크 복사"}
+              </button>
+            </div>
+          </div>
+        )}
 
         {!connected && (
           <div style={{ fontSize: 11.5, color: TEXT_DIM, marginTop: 14, lineHeight: 1.6, textAlign: "center" }}>
