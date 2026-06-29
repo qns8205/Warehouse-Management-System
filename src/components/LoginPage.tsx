@@ -212,7 +212,6 @@ export default function LoginPage({
 
           <div style={{ fontSize: "11px", color: isLightMode ? "#64748b" : "#94a3b8", display: "flex", justifyContent: "space-between" }}>
             <span>현재 동기화된 계정 수: <b style={{ color: "#6366f1" }}>{users.length}개</b></span>
-            <span>(기본 계정: admin / 1234)</span>
           </div>
 
           {localError && (

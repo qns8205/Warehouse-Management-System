@@ -1,7 +1,7 @@
 // AppsScript_Code.gs
 // 이 코드를 구글 스프레드시트의 [확장 프로그램] -> [Apps Script]에 붙여넣고 웹앱으로 배포하세요.
 
-const INVENTORY_SHEET_NAME = "시트1"; // 실제 사용 중인 스프레드시트의 시트 탭 이름으로 변경하세요.
+const INVENTORY_SHEET_NAME = "관리시트"; // 실제 사용 중인 스프레드시트의 시트 탭 이름으로 변경하세요.
 const DEFECT_SHEET_NAME = "불량로그";
 const RENT_SHEET_NAME = "대여로그";
 const USERS_SHEET_NAME = "Users"; // ID와 패스워드가 저장될 시트 탭 이름입니다.

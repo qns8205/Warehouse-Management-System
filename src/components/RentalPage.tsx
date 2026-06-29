@@ -28,6 +28,15 @@ export default function RentalPage({
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
+  // Cart for multiple items
+  const [cart, setCart] = useState<{
+    id: string;
+    item: InventoryItem;
+    qty: number;
+    type: "대여" | "반납";
+    note: string;
+  }[]>([]);
+
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // 드롭다운 외부 클릭 감지하여 닫기
@@ -63,14 +72,8 @@ export default function RentalPage({
     setIsDropdownOpen(false);
   };
 
-  // 대여/반납 신청서 처리
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (!rentUser.trim()) {
-      showToast("대여자(담당자) 이름을 입력해 주세요.", "warn");
-      return;
-    }
+  // 장바구니에 품목 임시 추가
+  const handleAddToCart = () => {
     if (!selectedItem) {
       showToast("대여 또는 반납할 품목을 선택해 주세요.", "warn");
       return;
@@ -80,41 +83,92 @@ export default function RentalPage({
       return;
     }
 
-    // 대여 수량 검증
+    // 대여일 때 재고 검증
     if (actionType === "대여") {
       const currentStock = selectedItem.stock ?? 0;
       if (currentStock <= 0) {
         showToast("선택한 물품의 현재고가 부족하여 대여할 수 없습니다.", "error");
         return;
       }
-      if (rentQty > currentStock) {
-        showToast(`현재고(${currentStock}개)를 초과하여 대여할 수 없습니다.`, "warn");
+      
+      // 장바구니에 담긴 동일 품목의 대여 수량 합산
+      const alreadyInCartQty = cart
+        .filter((c) => c.item.name === selectedItem.name && c.type === "대여")
+        .reduce((acc, c) => acc + c.qty, 0);
+
+      if ((rentQty + alreadyInCartQty) > currentStock) {
+        showToast(`현재고(${currentStock}개)를 초과하여 신청 장바구니에 담을 수 없습니다. (현재 장바구니: ${alreadyInCartQty}개)`, "warn");
         return;
       }
     }
 
+    const newCartItem = {
+      id: Date.now().toString() + Math.random().toString(36).substring(2, 5),
+      item: selectedItem,
+      qty: rentQty,
+      type: actionType,
+      note: noteInput.trim() || `${actionType} 신청`,
+    };
+
+    setCart((prev) => [...prev, newCartItem]);
+    showToast(`${selectedItem.name} ${rentQty}개가 신청 목록에 임시 추가되었습니다.`, "info");
+
+    // 자재 입력 영역만 리셋 (담당자는 유지)
+    setSelectedItem(null);
+    setRentQty(1);
+    setNoteInput("");
+    setSearchQuery("");
+  };
+
+  // 장바구니에서 특정 행 삭제
+  const handleRemoveFromCart = (id: string) => {
+    setCart((prev) => prev.filter((item) => item.id !== id));
+    showToast("신청 목록에서 제외했습니다.", "info");
+  };
+
+  // 대여/반납 신청서 일괄 제출 처리
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!rentUser.trim()) {
+      showToast("대여/반납 담당자 이름을 입력해 주세요.", "warn");
+      return;
+    }
+    if (cart.length === 0) {
+      showToast("신청 목록에 품목을 1개 이상 추가해 주세요.", "warn");
+      return;
+    }
+
     setSubmitting(true);
     try {
-      const log: RentLog = {
-        timestamp: formatTimestampLocal(),
-        location: selectedItem.location,
-        name: selectedItem.name,
-        type: actionType,
-        qty: rentQty,
-        user: rentUser.trim(),
-        note: noteInput.trim() || `${actionType} 접수`,
-      };
+      const now = new Date();
+      // 순차적으로 등록
+      for (let i = 0; i < cart.length; i++) {
+        const cartItem = cart[i];
+        
+        // 시간 중복으로 인한 스프레드시트 덮어쓰기 등을 막기 위해 미세 조정한 로컬 타임스탬프 구성
+        const baseTime = new Date(now.getTime() + i * 1000);
+        const pad = (n: number) => String(n).padStart(2, "0");
+        const customTsStr = `${baseTime.getFullYear()}-${pad(baseTime.getMonth() + 1)}-${pad(baseTime.getDate())} ${pad(baseTime.getHours())}:${pad(baseTime.getMinutes())}:${pad(baseTime.getSeconds())}`;
 
-      await onAddRentLog(log);
-      
-      // 입력값 리셋
-      setRentQty(1);
-      setNoteInput("");
-      setSearchQuery("");
-      setSelectedItem(null);
-      showToast(`${selectedItem.name} ${rentQty}개 ${actionType} 접수가 완료되었습니다!`, "ok");
+        const log: RentLog = {
+          timestamp: customTsStr,
+          location: cartItem.item.location,
+          name: cartItem.item.name,
+          type: cartItem.type,
+          qty: cartItem.qty,
+          user: rentUser.trim(),
+          note: cartItem.note,
+        };
+        await onAddRentLog(log);
+      }
+
+      // 초기화
+      setCart([]);
+      setRentUser("");
+      showToast(`총 ${cart.length}건의 대여/반납 신청서가 성공적으로 일괄 접수되었습니다!`, "ok");
     } catch (err: any) {
-      showToast("대여 처리에 실패했습니다: " + err.message, "error");
+      showToast("신청 처리에 실패했습니다: " + err.message, "error");
     } finally {
       setSubmitting(false);
     }
@@ -523,37 +577,11 @@ export default function RentalPage({
             </div>
 
             {/* 특이사항 / 대여 용도 */}
-            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-              <label style={{ fontSize: "11px", fontWeight: 700, color: isLightMode ? "#475569" : "#94a3b8" }}>
-                특이사항 / 용도 입력
-              </label>
-              <div style={{ position: "relative" }}>
-                <FileText size={16} style={{ position: "absolute", left: "12px", top: "12px", color: isLightMode ? "#94a3b8" : "#64748b" }} />
-                <textarea
-                  placeholder="예: 프로젝트 테스트 장비 세팅용 대여 또는 파손 흔적 있음 등"
-                  value={noteInput}
-                  onChange={(e) => setNoteInput(e.target.value)}
-                  style={{
-                    width: "100%",
-                    background: isLightMode ? "#f8fafc" : "#0f172a",
-                    border: `1px solid ${isLightMode ? "#cbd5e1" : "#222f4b"}`,
-                    borderRadius: "10px",
-                    padding: "10px 12px 10px 38px",
-                    color: isLightMode ? "#0f172a" : "#f1f5f9",
-                    fontSize: "13px",
-                    outline: "none",
-                    height: "80px",
-                    resize: "none",
-                    fontFamily: "inherit",
-                  }}
-                />
-              </div>
-            </div>
-
-            {/* 제출 버튼 */}
+            {/* 장바구니 담기 버튼 */}
             <button
-              type="submit"
-              disabled={submitting || (actionType === "대여" && selectedItem && (selectedItem.stock ?? 0) < rentQty)}
+              type="button"
+              onClick={handleAddToCart}
+              disabled={submitting}
               style={{
                 width: "100%",
                 background: actionType === "대여" ? "#4f46e5" : "#10b981",
@@ -566,17 +594,21 @@ export default function RentalPage({
                 cursor: "pointer",
                 transition: "all 0.2s",
                 boxShadow: `0 4px 14px ${actionType === "대여" ? "rgba(79, 70, 229, 0.3)" : "rgba(16, 185, 129, 0.3)"}`,
-                opacity: (submitting || (actionType === "대여" && selectedItem && (selectedItem.stock ?? 0) < rentQty)) ? 0.5 : 1,
-                pointerEvents: (submitting || (actionType === "대여" && selectedItem && (selectedItem.stock ?? 0) < rentQty)) ? "none" : "auto",
+                opacity: submitting ? 0.5 : 1,
                 marginTop: "10px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "6px"
               }}
             >
-              {submitting ? "처리 중..." : `${actionType} 신청서 제출하기`}
+              <Check size={16} />
+              신청 목록에 담기
             </button>
           </form>
         </div>
 
-        {/* 오른쪽: 선택한 품목 상세 설명 창 (Description Area) */}
+        {/* 오른쪽: 신청 목록 장바구니 (Cart) 및 최종 제출 */}
         <div
           style={{
             background: isLightMode ? "#ffffff" : "#151d30",
@@ -586,181 +618,196 @@ export default function RentalPage({
             boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.05)",
             display: "flex",
             flexDirection: "column",
+            gap: "24px",
           }}
         >
-          <h2 style={{ fontSize: "20px", fontWeight: 800, color: isLightMode ? "#0f172a" : "#f1f5f9", marginBottom: "8px" }}>
-            🔍 선택한 품목 정보 상세
-          </h2>
-          <p style={{ fontSize: "12px", color: isLightMode ? "#64748b" : "#94a3b8", marginBottom: "24px" }}>
-            품목을 선택하면 해당 자재의 실물 사진과 구글 시트에 기록된 특이사항을 한눈에 볼 수 있습니다.
-          </p>
-
-          {selectedItem ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: "20px", flex: 1 }}>
-              {/* 이미지 영역 */}
-              <div
-                style={{
-                  width: "100%",
-                  height: "220px",
-                  borderRadius: "16px",
-                  overflow: "hidden",
-                  border: `1px solid ${isLightMode ? "#e2e8f0" : "#222f4b"}`,
-                  background: isLightMode ? "#f8fafc" : "#0f172a",
-                  position: "relative",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                {selectedItem.photo ? (
-                  <img
-                    src={getGoogleDriveImageUrl(selectedItem.photo)}
-                    alt={selectedItem.name}
-                    referrerPolicy="no-referrer"
-                    style={{
-                      width: "100%",
-                      height: "100%",
-                      objectFit: "contain",
-                    }}
-                  />
-                ) : (
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "10px", color: isLightMode ? "#94a3b8" : "#475569" }}>
-                    <ImageIcon size={48} strokeWidth={1.2} />
-                    <span style={{ fontSize: "12px" }}>등록된 물품 사진이 없습니다</span>
-                  </div>
-                )}
-                {selectedItem.location && (
-                  <span
-                    style={{
-                      position: "absolute",
-                      bottom: "12px",
-                      right: "12px",
-                      background: "rgba(79, 70, 229, 0.9)",
-                      color: "#ffffff",
-                      fontSize: "11px",
-                      fontWeight: 700,
-                      padding: "4px 8px",
-                      borderRadius: "6px",
-                    }}
-                  >
-                    위치: {selectedItem.location}
-                  </span>
-                )}
-              </div>
-
-              {/* 품목명과 규격 */}
-              <div>
-                <h3 style={{ fontSize: "18px", fontWeight: 800, color: isLightMode ? "#0f172a" : "#ffffff", marginBottom: "6px" }}>
-                  {selectedItem.name}
-                </h3>
-                {selectedItem.spec && (
-                  <div
-                    style={{
-                      fontSize: "12px",
-                      background: isLightMode ? "#f1f5f9" : "rgba(255, 255, 255, 0.05)",
-                      padding: "6px 12px",
-                      borderRadius: "6px",
-                      color: isLightMode ? "#475569" : "#cbd5e1",
-                      display: "inline-block",
-                      fontFamily: "var(--font-mono, monospace)",
-                    }}
-                  >
-                    규격: {selectedItem.spec}
-                  </div>
-                )}
-              </div>
-
-              {/* 디테일 메타 정보 */}
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: "12px",
-                  background: isLightMode ? "#f8fafc" : "#0f172a",
-                  padding: "16px",
-                  borderRadius: "14px",
-                  border: `1px solid ${isLightMode ? "#e2e8f0" : "#222f4b"}`,
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: "11px", color: isLightMode ? "#64748b" : "#94a3b8", marginBottom: "4px" }}>현재 재고 수량</div>
-                  <div style={{ fontSize: "16px", fontWeight: 800, color: (selectedItem.stock ?? 0) > 0 ? "#10b981" : "#ef4444" }}>
-                    {selectedItem.stock ?? 0} 개
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: "11px", color: isLightMode ? "#64748b" : "#94a3b8", marginBottom: "4px" }}>최종 업데이트 시간</div>
-                  <div style={{ fontSize: "11px", fontWeight: 600, color: isLightMode ? "#334155" : "#cbd5e1" }}>
-                    {selectedItem.updatedAt || "N/A"}
-                  </div>
-                </div>
-              </div>
-
-              {/* 비고 / 특이사항 영역 */}
-              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                <span style={{ fontSize: "11px", fontWeight: 700, color: isLightMode ? "#475569" : "#94a3b8" }}>
-                  📋 시트 등록 특이사항 및 상세설명
-                </span>
-                <div
+          {/* 장바구니 영역 */}
+          <div>
+            <h2 style={{ fontSize: "20px", fontWeight: 800, color: isLightMode ? "#0f172a" : "#f1f5f9", marginBottom: "8px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span>🛒 대여/반납 신청 대기 목록</span>
+              {cart.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setCart([])}
                   style={{
-                    padding: "14px",
-                    background: isLightMode ? "rgba(241, 245, 249, 0.5)" : "rgba(255, 255, 255, 0.02)",
-                    border: `1px solid ${isLightMode ? "#e2e8f0" : "#222f4b"}`,
-                    borderRadius: "12px",
-                    fontSize: "12.5px",
-                    lineHeight: 1.6,
-                    color: selectedItem.note ? (isLightMode ? "#334155" : "#cbd5e1") : (isLightMode ? "#94a3b8" : "#64748b"),
-                    minHeight: "70px",
-                    whiteSpace: "pre-wrap",
-                  }}
-                >
-                  {selectedItem.note || "스프레드시트에 등록된 별도의 특이사항이 없습니다."}
-                </div>
-              </div>
-
-              {selectedItem.link && (
-                <a
-                  href={selectedItem.link}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    display: "block",
-                    textAlign: "center",
-                    padding: "10px",
-                    borderRadius: "10px",
-                    background: "rgba(99, 102, 241, 0.1)",
-                    color: "#818cf8",
-                    fontSize: "12px",
+                    background: "transparent",
+                    color: "#ef4444",
+                    border: "none",
+                    fontSize: "11px",
                     fontWeight: 700,
-                    textDecoration: "none",
-                    marginTop: "auto",
+                    cursor: "pointer"
                   }}
                 >
-                  🔗 구매 상세 링크 바로가기
-                </a>
+                  비우기
+                </button>
               )}
+            </h2>
+            <p style={{ fontSize: "12px", color: isLightMode ? "#64748b" : "#94a3b8", marginBottom: "16px" }}>
+              왼쪽에서 품목을 입력해 담은 후, 아래 제출 버튼을 클릭해 최종 접수하세요.
+            </p>
+
+            {cart.length === 0 ? (
+              <div
+                style={{
+                  border: `2px dashed ${isLightMode ? "#cbd5e1" : "#222f4b"}`,
+                  borderRadius: "16px",
+                  padding: "40px 20px",
+                  textAlign: "center",
+                  color: isLightMode ? "#94a3b8" : "#475569",
+                  fontSize: "13px",
+                }}
+              >
+                <Package size={36} style={{ margin: "0 auto 8px", opacity: 0.5 }} />
+                신청 대기 목록이 비어 있습니다.
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: "10px", maxHeight: "240px", overflowY: "auto", paddingRight: "4px" }}>
+                {cart.map((c) => (
+                  <div
+                    key={c.id}
+                    style={{
+                      background: isLightMode ? "#f8fafc" : "#0f172a",
+                      border: `1px solid ${isLightMode ? "#e2e8f0" : "#222f4b"}`,
+                      borderRadius: "14px",
+                      padding: "12px 16px",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: "14px", fontWeight: 800, color: isLightMode ? "#1e293b" : "#f1f5f9" }}>
+                        {c.item.name}
+                      </div>
+                      <div style={{ display: "flex", gap: "10px", fontSize: "11px", color: isLightMode ? "#64748b" : "#94a3b8", marginTop: "4px" }}>
+                        <span
+                          style={{
+                            fontWeight: 800,
+                            color: c.type === "대여" ? "#4f46e5" : "#10b981",
+                          }}
+                        >
+                          [{c.type}]
+                        </span>
+                        <span>{c.qty}개</span>
+                        <span>위치: {c.item.location}</span>
+                      </div>
+                      {c.note && (
+                        <div style={{ fontSize: "11px", color: isLightMode ? "#94a3b8" : "#64748b", marginTop: "2px", fontStyle: "italic" }}>
+                          사유: {c.note}
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveFromCart(c.id)}
+                      style={{
+                        background: "rgba(239, 68, 68, 0.1)",
+                        color: "#ef4444",
+                        border: "none",
+                        width: "28px",
+                        height: "28px",
+                        borderRadius: "8px",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontWeight: "bold",
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* 최종 제출 폼 */}
+          <form onSubmit={handleSubmit} style={{ marginTop: "auto", borderTop: `1px solid ${isLightMode ? "#e2e8f0" : "#222f4b"}`, paddingTop: "24px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "16px", fontSize: "14px" }}>
+              <span style={{ fontWeight: 700, color: isLightMode ? "#475569" : "#94a3b8" }}>총 대기 품목</span>
+              <span style={{ fontWeight: 800, color: "#4f46e5" }}>{cart.length}개 건</span>
             </div>
-          ) : (
-            <div
+
+            <button
+              type="submit"
+              disabled={submitting || cart.length === 0}
               style={{
+                width: "100%",
+                background: "#4f46e5",
+                color: "#ffffff",
+                border: "none",
+                borderRadius: "14px",
+                padding: "14px",
+                fontSize: "15px",
+                fontWeight: 800,
+                cursor: (submitting || cart.length === 0) ? "not-allowed" : "pointer",
+                boxShadow: "0 10px 15px -3px rgba(79, 70, 229, 0.3)",
+                opacity: (submitting || cart.length === 0) ? 0.5 : 1,
                 display: "flex",
-                flexDirection: "column",
                 alignItems: "center",
                 justifyContent: "center",
-                flex: 1,
-                minHeight: "300px",
-                border: `2px dashed ${isLightMode ? "#cbd5e1" : "#222f4b"}`,
-                borderRadius: "16px",
-                padding: "24px",
-                color: isLightMode ? "#94a3b8" : "#475569",
+                gap: "8px"
               }}
             >
-              <Package size={48} strokeWidth={1.2} style={{ marginBottom: "12px" }} />
-              <p style={{ fontSize: "13px", fontWeight: 600 }}>선택된 품목이 없습니다</p>
-              <p style={{ fontSize: "11px", textAlign: "center", marginTop: "4px" }}>
-                좌측의 품목 검색 또는 드롭다운을 통해 품목을 선택하면<br />
-                해당 품목의 사진과 세부 명세가 노출됩니다.
-              </p>
+              {submitting ? "구글 시트 전송 중..." : `대여/반납 신청서 일괄 제출하기 (총 ${cart.length}건)`}
+            </button>
+          </form>
+
+          <div style={{ height: "1px", background: isLightMode ? "#e2e8f0" : "#222f4b" }} />
+
+          {/* 선택한 품목 상세 요약 (간략히 제공) */}
+          {selectedItem ? (
+            <div
+              style={{
+                background: isLightMode ? "#f8fafc" : "#0f172a",
+                border: `1px solid ${isLightMode ? "#cbd5e1" : "#222f4b"}`,
+                borderRadius: "16px",
+                padding: "16px",
+                display: "flex",
+                gap: "12px",
+                alignItems: "center"
+              }}
+            >
+              {selectedItem.photo ? (
+                <img
+                  src={getGoogleDriveImageUrl(selectedItem.photo)}
+                  alt={selectedItem.name}
+                  referrerPolicy="no-referrer"
+                  style={{
+                    width: "50px",
+                    height: "50px",
+                    borderRadius: "8px",
+                    objectFit: "cover",
+                  }}
+                />
+              ) : (
+                <div
+                  style={{
+                    width: "50px",
+                    height: "50px",
+                    borderRadius: "8px",
+                    background: isLightMode ? "#e2e8f0" : "#1e293b",
+                    color: isLightMode ? "#64748b" : "#94a3b8",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center"
+                  }}
+                >
+                  <Package size={20} />
+                </div>
+              )}
+              <div style={{ textAlign: "left" }}>
+                <div style={{ fontSize: "11px", color: "#6366f1", fontWeight: 700 }}>🔍 선택된 자재 사양</div>
+                <div style={{ fontSize: "13px", fontWeight: 800 }}>{selectedItem.name}</div>
+                <div style={{ fontSize: "11px", color: isLightMode ? "#64748b" : "#94a3b8" }}>
+                  위치: {selectedItem.location} | 현재고: {selectedItem.stock ?? 0}개
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: "11px", color: isLightMode ? "#94a3b8" : "#475569", textAlign: "center" }}>
+              품목을 선택하면 해당 자재 정보의 요약이 여기에 표출됩니다.
             </div>
           )}
         </div>

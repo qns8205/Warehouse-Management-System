@@ -58,6 +58,7 @@ export default function DefectLogsPage({
   
   // Custom manual input mode toggles
   const [manualItemName, setManualItemName] = useState(false);
+  const [itemSearchQuery, setItemSearchQuery] = useState("");
 
   // Filter states
   const [filterQuery, setFilterQuery] = useState("");
@@ -83,6 +84,15 @@ export default function DefectLogsPage({
     }
     return items.sort((a, b) => a.name.localeCompare(b.name));
   }, [inventory]);
+
+  const filteredUniqueItems = useMemo(() => {
+    const q = itemSearchQuery.toLowerCase().trim();
+    if (!q) return uniqueItems;
+    return uniqueItems.filter((item) =>
+      item.name.toLowerCase().includes(q) ||
+      item.location.toLowerCase().includes(q)
+    );
+  }, [uniqueItems, itemSearchQuery]);
 
   const handleItemSelectChange = (name: string) => {
     setNameInput(name);
@@ -356,30 +366,51 @@ export default function DefectLogsPage({
                   }}
                 />
               ) : (
-                <select
-                  required
-                  value={nameInput}
-                  onChange={(e) => handleItemSelectChange(e.target.value)}
-                  style={{
-                    width: "100%",
-                    background: "var(--input-bg, #0f172a)",
-                    border: `1px solid ${PANEL_BORDER}`,
-                    color: TEXT_MAIN,
-                    padding: "10px 12px",
-                    borderRadius: "6px",
-                    fontSize: "13px",
-                  }}
-                >
-                  <option value="">품목 선택...</option>
-                  {uniqueItems.map((item, idx) => (
-                    <option key={idx} value={item.name}>
-                      {item.name} {item.location ? `(${item.location})` : ""} {item.stock != null ? ` - 재고: ${item.stock}개` : ""}
-                    </option>
-                  ))}
-                  {uniqueItems.length === 0 && (
-                    <option disabled>인벤토리에 등록된 품목이 없습니다.</option>
-                  )}
-                </select>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <div style={{ position: "relative" }}>
+                    <Search size={14} style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", color: TEXT_DIM }} />
+                    <input
+                      type="text"
+                      placeholder="자재 목록 검색 (이름, 위치 등)..."
+                      value={itemSearchQuery}
+                      onChange={(e) => setItemSearchQuery(e.target.value)}
+                      style={{
+                        width: "100%",
+                        background: "var(--input-bg, #0f172a)",
+                        border: `1px solid ${PANEL_BORDER}`,
+                        color: TEXT_MAIN,
+                        padding: "8px 10px 8px 32px",
+                        borderRadius: "6px",
+                        fontSize: "12px",
+                        outline: "none",
+                      }}
+                    />
+                  </div>
+                  <select
+                    required
+                    value={nameInput}
+                    onChange={(e) => handleItemSelectChange(e.target.value)}
+                    style={{
+                      width: "100%",
+                      background: "var(--input-bg, #0f172a)",
+                      border: `1px solid ${PANEL_BORDER}`,
+                      color: TEXT_MAIN,
+                      padding: "10px 12px",
+                      borderRadius: "6px",
+                      fontSize: "13px",
+                    }}
+                  >
+                    <option value="">품목 선택... ({filteredUniqueItems.length}개 검색됨)</option>
+                    {filteredUniqueItems.map((item, idx) => (
+                      <option key={idx} value={item.name}>
+                        {item.name} {item.location ? `(${item.location})` : ""} {item.stock != null ? ` - 재고: ${item.stock}개` : ""}
+                      </option>
+                    ))}
+                    {filteredUniqueItems.length === 0 && (
+                      <option disabled>일치하는 자재 품목이 없습니다.</option>
+                    )}
+                  </select>
+                </div>
               )}
             </div>
 
