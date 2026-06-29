@@ -9,6 +9,9 @@ interface RentalPageProps {
   onBack: () => void;
   isLightMode: boolean;
   showToast: (msg: string, type: "ok" | "error" | "info" | "warn") => void;
+  connected: boolean;
+  lastSync: Date | null;
+  onOpenSetup: () => void;
 }
 
 export default function RentalPage({
@@ -17,6 +20,9 @@ export default function RentalPage({
   onBack,
   isLightMode,
   showToast,
+  connected,
+  lastSync,
+  onOpenSetup,
 }: RentalPageProps) {
   // 상태 선언
   const [rentUser, setRentUser] = useState("");
@@ -215,6 +221,65 @@ export default function RentalPage({
         >
           <ArrowLeft size={16} />
           처음 화면으로
+        </button>
+      </div>
+
+      {/* 실시간 연동 상태 바 */}
+      <div
+        style={{
+          maxWidth: "1000px",
+          width: "100%",
+          background: connected ? "rgba(16, 185, 129, 0.08)" : "rgba(245, 158, 11, 0.08)",
+          border: connected ? "1px solid rgba(16, 185, 129, 0.25)" : "1px solid rgba(245, 158, 11, 0.25)",
+          borderRadius: "14px",
+          padding: "12px 20px",
+          marginBottom: "24px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: "12px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <span
+            style={{
+              width: "10px",
+              height: "10px",
+              borderRadius: "50%",
+              background: connected ? "#10b981" : "#f59e0b",
+              boxShadow: connected ? "0 0 10px #10b981" : "0 0 10px #f59e0b",
+              display: "inline-block",
+            }}
+          />
+          <div style={{ fontSize: "13px" }}>
+            <span style={{ fontWeight: 700, color: connected ? (isLightMode ? "#047857" : "#34d399") : (isLightMode ? "#b45309" : "#fbbf24"), marginRight: "8px" }}>
+              {connected ? "구글 시트 실시간 연동 활성화" : "데모 가상 모드 작동 중"}
+            </span>
+            <span style={{ color: isLightMode ? "#475569" : "#94a3b8", fontSize: "12px" }}>
+              {connected 
+                ? `(10초 주기 실시간 자동 동기화 중 | 최근 동기화: ${lastSync ? lastSync.toLocaleTimeString() : "진행 중..."})`
+                : "(스프레드시트 미연동 상태로, 기록이 파일에 보존되지 않습니다)"}
+            </span>
+          </div>
+        </div>
+        <button
+          onClick={onOpenSetup}
+          style={{
+            background: connected ? "rgba(99, 102, 241, 0.15)" : "#f59e0b",
+            color: connected ? "#6366f1" : "#ffffff",
+            border: "none",
+            borderRadius: "8px",
+            padding: "6px 14px",
+            fontSize: "12px",
+            fontWeight: 700,
+            cursor: "pointer",
+            transition: "all 0.2s",
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-1px)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; }}
+        >
+          {connected ? "연동 설정 확인" : "구글 시트 연동 설정하기"}
         </button>
       </div>
 

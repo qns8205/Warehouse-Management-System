@@ -361,7 +361,7 @@ export default function App() {
   useEffect(() => {
     if (!connected || !scriptUrl) return;
 
-    // 마운트 시 즉시 한 번 갱신 보장
+    // 마운트 혹은 화면 전환 시 즉시 한 번 갱신 보장
     silentRefresh();
 
     const interval = setInterval(() => {
@@ -369,7 +369,7 @@ export default function App() {
     }, 10000); // 10초 간격 폴링
 
     return () => clearInterval(interval);
-  }, [connected, scriptUrl]); // eslint-disable-line
+  }, [connected, scriptUrl, currentView]); // eslint-disable-line
 
   // 구글 스프레드시트 데이터와 랙 선반 정보 병합
   function racksFromServerSectors(sectors: any[], inv: InventoryItem[]): Rack[] {
@@ -1021,6 +1021,7 @@ export default function App() {
           setScriptUrl("");
           showToast("스프레드시트 연동이 해제되었습니다. 가상 데모 모드로 동작합니다.", "info");
         }}
+        onOpenSetup={() => setShowSetup(true)}
       />
     );
   }
@@ -1055,6 +1056,9 @@ export default function App() {
         }}
         isLightMode={isLightMode}
         showToast={showToast}
+        connected={connected}
+        lastSync={lastSync}
+        onOpenSetup={() => setShowSetup(true)}
       />
     );
   }
