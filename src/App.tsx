@@ -182,6 +182,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [highlightShelf, setHighlightShelf] = useState<string | null>(null);
+  const [highlightedItemRowIndex, setHighlightedItemRowIndex] = useState<number | null>(null);
 
   const [showAddRackModal, setShowAddRackModal] = useState(false);
   const [newRackCode, setNewRackCode] = useState("");
@@ -726,7 +727,10 @@ export default function App() {
     const { rack } = parseLocation(item.location);
     setSelectedRackId(rack);
     setHighlightShelf(item.location.trim());
+    setHighlightedItemRowIndex(item.rowIndex ?? null);
     setSearchOpen(false);
+    
+    showToast(`🔍 ${item.name}의 위치(${item.location})로 자동 이동하였습니다.`, "ok");
 
     // 해당 랙 카드가 있는 위치로 스크롤 이동
     setTimeout(() => {
@@ -736,7 +740,10 @@ export default function App() {
       }
     }, 100);
 
-    setTimeout(() => setHighlightShelf(null), 3000);
+    setTimeout(() => {
+      setHighlightShelf(null);
+      setHighlightedItemRowIndex(null);
+    }, 5000);
   }
 
   /* ---------------- 품목 추가 / 수정 / 삭제 실시간 연동 ---------------- */
@@ -1099,13 +1106,18 @@ export default function App() {
           >
             <Search size={15} style={{ color: "var(--text-dim, #94a3b8)", marginRight: 8 }} />
             <input
-              placeholder="품목명, 특이사항, 위치, 담당자로 스마트 검색..."
+              placeholder="품목 검색... (엔터 누르면 첫 결과의 위치로 바로 이동)"
               value={searchQuery}
               onChange={(e) => {
                 setSearchQuery(e.target.value);
                 setSearchOpen(true);
               }}
               onFocus={() => setSearchOpen(true)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && searchResults.length > 0) {
+                  focusOnItem(searchResults[0]);
+                }
+              }}
               style={{
                 width: "100%",
                 padding: "8px 0",
@@ -1113,6 +1125,7 @@ export default function App() {
                 border: "none",
                 color: "var(--text-main, #f1f5f9)",
                 fontSize: 13,
+                outline: "none",
               }}
             />
           </div>
@@ -1552,9 +1565,11 @@ export default function App() {
                   ? highlightShelf
                   : null
               }
+              highlightedItemRowIndex={highlightedItemRowIndex}
               onChangeStock={handleChangeStock}
               isAdmin={isAdmin}
               onRentItem={(item, actionType) => setShowRentModal({ item, actionType })}
+              isLightMode={isLightMode}
             />
           </>
         )}

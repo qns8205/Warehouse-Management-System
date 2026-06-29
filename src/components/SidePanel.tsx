@@ -13,9 +13,11 @@ interface SidePanelProps {
   onAddItem: () => void;
   onDeleteItem: (rowIndex: number) => void;
   highlightShelf: string | null;
+  highlightedItemRowIndex?: number | null;
   onChangeStock: (item: InventoryItem, delta: number) => void;
   isAdmin?: boolean;
   onRentItem?: (item: InventoryItem, actionType: "대여" | "반납") => void;
+  isLightMode?: boolean;
 }
 
 const PANEL = "var(--panel-bg, #1e293b)";
@@ -39,9 +41,11 @@ export default function SidePanel({
   onAddItem,
   onDeleteItem,
   highlightShelf,
+  highlightedItemRowIndex = null,
   onChangeStock,
   isAdmin = false,
   onRentItem,
+  isLightMode = false,
 }: SidePanelProps) {
   const [nameInput, setNameInput] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -66,8 +70,41 @@ export default function SidePanel({
   useEffect(() => {
     if (highlightShelf) {
       setExpandedShelves((prev) => ({ ...prev, [highlightShelf]: true }));
+      // Wait a little for the side panel expansion to complete, then scroll smoothly
+      setTimeout(() => {
+        const element = document.getElementById(`shelf-container-${highlightShelf}`);
+        if (element) {
+          element.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      }, 300);
     }
   }, [highlightShelf]);
+
+  useEffect(() => {
+    if (highlightedItemRowIndex !== null) {
+      // Find the shelf containing this item
+      let foundShelf: string | null = null;
+      for (const s of shelvesWithItems) {
+        if (s.items.some((it) => it.rowIndex === highlightedItemRowIndex)) {
+          foundShelf = s.shelf;
+          break;
+        }
+      }
+
+      if (foundShelf) {
+        // Expand the corresponding shelf
+        setExpandedShelves((prev) => ({ ...prev, [foundShelf!]: true }));
+      }
+
+      // Smooth scroll to the specific item card
+      setTimeout(() => {
+        const element = document.getElementById(`item-card-${highlightedItemRowIndex}`);
+        if (element) {
+          element.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      }, 350);
+    }
+  }, [highlightedItemRowIndex, shelvesWithItems]);
 
   if (!rack) {
     return (
@@ -293,28 +330,35 @@ export default function SidePanel({
             const isExpanded = !!expandedShelves[shelf];
 
             return (
-              <div key={shelf} style={{ marginBottom: 12 }}>
+              <div id={`shelf-container-${shelf}`} key={shelf} style={{ marginBottom: 12, position: "relative" }}>
                 {/* Shelf Title Button */}
                 <button
                   onClick={() => toggleShelf(shelf)}
                   style={{
+                    position: "sticky",
+                    top: 0,
+                    zIndex: 10,
                     width: "100%",
                     display: "flex",
                     justifyContent: "space-between",
                     alignItems: "center",
-                    background: isHighlighted ? hexToRgba(WARN, 0.18) : hexToRgba(rack.color, 0.1),
-                    border: `1px solid ${isHighlighted ? hexToRgba(WARN, 0.7) : hexToRgba(rack.color, 0.3)}`,
+                    background: isHighlighted 
+                      ? "rgba(245, 158, 11, 0.95)" 
+                      : (isLightMode ? "rgba(241, 245, 249, 0.95)" : "rgba(30, 41, 59, 0.95)"),
+                    backdropFilter: "blur(4px)",
+                    border: `2px solid ${isHighlighted ? "#f59e0b" : hexToRgba(rack.color, 0.4)}`,
+                    boxShadow: isHighlighted ? "0 4px 12px rgba(245, 158, 11, 0.4)" : "0 2px 6px rgba(0, 0, 0, 0.08)",
                     borderRadius: 6,
                     padding: "8px 10px",
                     marginBottom: 6,
-                    transition: "background 0.3s, border-color 0.3s",
+                    transition: "all 0.3s ease-in-out",
                     cursor: "pointer",
                   }}
                 >
-                  <span className="mono" style={{ fontSize: "12.5px", fontWeight: 700, color: TEXT_MAIN }}>
-                    {shelf}
+                  <span className="mono" style={{ fontSize: "12.5px", fontWeight: 700, color: isHighlighted ? "#ffffff" : (isLightMode ? "#0f172a" : TEXT_MAIN) }}>
+                    {isHighlighted ? `🔍 ${shelf} (검색됨)` : shelf}
                   </span>
-                  <span style={{ fontSize: "11px", color: TEXT_DIM, display: "flex", alignItems: "center", gap: 4 }}>
+                  <span style={{ fontSize: "11px", color: isHighlighted ? "#ffffff" : TEXT_DIM, display: "flex", alignItems: "center", gap: 4 }}>
                     {items.length}개 품목 {isExpanded ? "▲" : "▼"}
                   </span>
                 </button>
@@ -325,18 +369,22 @@ export default function SidePanel({
                     {items.map((item) => {
                       const hasImage = !!item.photo;
                       const imageUrl = hasImage ? getGoogleDriveImageUrl(item.photo) : "";
+                      const isItemHighlighted = highlightedItemRowIndex === item.rowIndex;
 
                       return (
                         <div
+                          id={`item-card-${item.rowIndex}`}
                           key={item.rowIndex}
                           style={{
-                            background: "var(--input-bg, #0f172a)",
-                            border: `1px solid ${PANEL_BORDER}`,
+                            background: isItemHighlighted ? "rgba(245, 158, 11, 0.12)" : "var(--input-bg, #0f172a)",
+                            border: isItemHighlighted ? "2px solid #f59e0b" : `1px solid ${PANEL_BORDER}`,
+                            boxShadow: isItemHighlighted ? "0 0 14px rgba(245, 158, 11, 0.45)" : "none",
                             borderRadius: 8,
                             padding: "10px 12px",
                             display: "flex",
                             flexDirection: "column",
                             gap: 8,
+                            transition: "all 0.3s ease-in-out",
                           }}
                         >
                           {/* Photo and basic info row */}
