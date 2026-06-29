@@ -1,48 +1,71 @@
-// AppsScript_Code.gs
+import React, { useState } from "react";
+
+interface SetupModalProps {
+  scriptUrl: string;
+  setScriptUrl: (url: string) => void;
+  connecting: boolean;
+  connectError: string;
+  connected: boolean;
+  onConnect: () => void;
+  onClose: () => void;
+  onDisconnect: () => void;
+}
+
+const PANEL = "var(--panel-bg, #1e293b)";
+const PANEL_BORDER = "var(--panel-border, #334155)";
+const TEXT_MAIN = "var(--text-main, #f1f5f9)";
+const TEXT_DIM = "var(--text-dim, #94a3b8)";
+const ACCENT = "#6366f1";
+const DANGER = "#f43f5e";
+const OK = "#10b981";
+
+export default function SetupModal({
+  scriptUrl,
+  setScriptUrl,
+  connecting,
+  connectError,
+  connected,
+  onConnect,
+  onClose,
+  onDisconnect,
+}: SetupModalProps) {
+  const [copied, setCopied] = useState(false);
+
+  const scriptCode = `// AppsScript_Code.gs
 // 이 코드를 구글 스프레드시트의 [확장 프로그램] -> [Apps Script]에 붙여넣고 웹앱으로 배포하세요.
 
-const INVENTORY_SHEET_NAME = "관리시트"; // 실제 사용 중인 스프레드시트의 시트 탭 이름으로 변경하세요.
+const INVENTORY_SHEET_NAME = "시트1"; // 실제 사용 중인 스프레드시트의 시트 탭 이름으로 변경하세요.
 const DEFECT_SHEET_NAME = "불량로그";
 const RENT_SHEET_NAME = "대여로그";
-const USERS_SHEET_NAME = "Users"; // ID와 패스워드가 저장될 시트 탭 이름입니다.
 
 function doGet(e) {
   try {
     const action = e.parameter.action;
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = ss.getSheetByName(INVENTORY_SHEET_NAME);
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(INVENTORY_SHEET_NAME);
     if (!sheet) {
       return responseJSON({ success: false, error: "시트 '" + INVENTORY_SHEET_NAME + "'를 찾을 수 없습니다." });
     }
     
     // 불량로그 시트 가져오거나 없으면 자동 생성
-    let defectSheet = ss.getSheetByName(DEFECT_SHEET_NAME);
+    let defectSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(DEFECT_SHEET_NAME);
     if (!defectSheet) {
-      defectSheet = ss.insertSheet(DEFECT_SHEET_NAME);
+      defectSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(DEFECT_SHEET_NAME);
       defectSheet.getRange(1, 1, 1, 6).setValues([["제품명", "개수", "기록 시간", "불량 유형", "세부 사항", "대처 방안"]]);
     }
     
     // 대여로그 시트 가져오거나 없으면 자동 생성
-    let rentSheet = ss.getSheetByName(RENT_SHEET_NAME);
+    let rentSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(RENT_SHEET_NAME);
     if (!rentSheet) {
-      rentSheet = ss.insertSheet(RENT_SHEET_NAME);
+      rentSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(RENT_SHEET_NAME);
       rentSheet.getRange(1, 1, 1, 7).setValues([["기록 시간", "구분", "위치", "제품명", "수량", "대여자 성함", "메모"]]);
     }
     
     if (action === "getAll") {
       const inventory = getInventoryData(sheet);
       const sectors = getSectorLayout();
-      const users = getUsersData(ss);
       const defectLogs = getDefectLogs(defectSheet);
       const rentLogs = getRentLogs(rentSheet);
-      return responseJSON({
-        success: true,
-        inventory: inventory,
-        sectors: sectors,
-        users: users,
-        defectLogs: defectLogs,
-        rentLogs: rentLogs
-      });
+      return responseJSON({ success: true, inventory: inventory, sectors: sectors, defectLogs: defectLogs, rentLogs: rentLogs });
     }
     
     return responseJSON({ success: false, error: "알 수 없는 GET 액션입니다." });
@@ -56,8 +79,7 @@ function doPost(e) {
     const requestData = JSON.parse(e.postData.contents);
     const action = requestData.action;
     const payload = requestData.payload;
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = ss.getSheetByName(INVENTORY_SHEET_NAME);
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(INVENTORY_SHEET_NAME);
     if (!sheet) {
       return responseJSON({ success: false, error: "시트 '" + INVENTORY_SHEET_NAME + "'를 찾을 수 없습니다." });
     }
@@ -88,9 +110,9 @@ function doPost(e) {
     }
 
     if (action === "addDefectLog") {
-      let defectSheet = ss.getSheetByName(DEFECT_SHEET_NAME);
+      let defectSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(DEFECT_SHEET_NAME);
       if (!defectSheet) {
-        defectSheet = ss.insertSheet(DEFECT_SHEET_NAME);
+        defectSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(DEFECT_SHEET_NAME);
         defectSheet.getRange(1, 1, 1, 6).setValues([["제품명", "개수", "기록 시간", "불량 유형", "세부 사항", "대처 방안"]]);
       }
       const newRowIndex = addDefectLog(defectSheet, payload);
@@ -98,9 +120,9 @@ function doPost(e) {
     }
 
     if (action === "rentInventoryItem") {
-      let rentSheet = ss.getSheetByName(RENT_SHEET_NAME);
+      let rentSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(RENT_SHEET_NAME);
       if (!rentSheet) {
-        rentSheet = ss.insertSheet(RENT_SHEET_NAME);
+        rentSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(RENT_SHEET_NAME);
         rentSheet.getRange(1, 1, 1, 7).setValues([["기록 시간", "구분", "위치", "제품명", "수량", "대여자 성함", "메모"]]);
       }
       const newRowIndex = addRentLog(rentSheet, payload);
@@ -139,35 +161,6 @@ function doPost(e) {
   } catch (err) {
     return responseJSON({ success: false, error: err.toString() });
   }
-}
-
-function getUsersData(ss) {
-  let userSheet = ss.getSheetByName(USERS_SHEET_NAME);
-  if (!userSheet) {
-    // Users 시트가 없다면 기본 어드민 정보로 자동 생성해 줍니다.
-    userSheet = ss.insertSheet(USERS_SHEET_NAME);
-    userSheet.getRange(1, 1, 1, 2).setValues([["ID", "PASSWORD"]]);
-    userSheet.getRange(2, 1, 1, 2).setValues([["admin", "1234"]]);
-    SpreadsheetApp.flush();
-  }
-  
-  const lastRow = userSheet.getLastRow();
-  if (lastRow < 2) {
-    return [{ id: "admin", password: "1234" }];
-  }
-  
-  const range = userSheet.getRange(2, 1, lastRow - 1, 2);
-  const values = range.getValues();
-  const users = [];
-  
-  for (let i = 0; i < values.length; i++) {
-    const id = String(values[i][0] || "").trim();
-    const password = String(values[i][1] || "").trim();
-    if (id) {
-      users.push({ id: id, password: password });
-    }
-  }
-  return users;
 }
 
 function getInventoryData(sheet) {
@@ -407,4 +400,172 @@ function formatDate(date) {
 function responseJSON(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
+}`;
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(scriptCode);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(10,10,11,0.7)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 50,
+        backdropFilter: "blur(2px)",
+      }}
+      onPointerDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        style={{
+          width: 560,
+          maxWidth: "92vw",
+          maxHeight: "86vh",
+          overflowY: "auto",
+          background: PANEL,
+          border: `1px solid ${PANEL_BORDER}`,
+          borderRadius: 12,
+          padding: 24,
+          boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>구글 스프레드시트 실시간 연동 설정</div>
+          <button
+            onClick={onClose}
+            style={{ background: "transparent", border: "none", color: TEXT_DIM, fontSize: 18, cursor: "pointer" }}
+          >
+            ✕
+          </button>
+        </div>
+
+        <div style={{ fontSize: 13, color: TEXT_DIM, lineHeight: 1.7, marginBottom: 16 }}>
+          Google Apps Script 웹앱 URL을 입력하여 스프레드시트의 재고 목록을 실시간으로 관리할 수 있습니다. 
+          아래 단계를 따라서 스크립트를 최초 1회 설치 및 배포해 주세요.
+        </div>
+
+        <div style={{ marginBottom: 16, background: "var(--input-bg, #0f172a)", padding: 12, borderRadius: 8, border: `1px solid ${PANEL_BORDER}` }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <span style={{ fontSize: 12.5, fontWeight: 600, color: OK }}>Apps Script 복사하기</span>
+            <button
+              onClick={handleCopy}
+              style={{
+                background: copied ? OK : ACCENT,
+                color: "#ffffff",
+                border: "none",
+                borderRadius: 4,
+                padding: "4px 10px",
+                fontSize: 11.5,
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              {copied ? "✓ 복사 완료!" : "코드 복사하기"}
+            </button>
+          </div>
+          <p style={{ fontSize: 11.5, color: TEXT_DIM, margin: 0, lineHeight: 1.5 }}>
+            이 코드에는 <b>Column H (특이사항)</b> 매핑, 구글 드라이브 사진 연동 지원, 그리고 <b>'불량로그' 자동 생성 및 실시간 동기화 기록 기능</b>이 완벽하게 반영되어 있습니다.
+          </p>
+        </div>
+
+        <details style={{ marginBottom: 16 }}>
+          <summary style={{ cursor: "pointer", fontSize: 12.5, color: ACCENT, fontWeight: 600, marginBottom: 8 }}>
+            설치 가이드 (상세설명 펼치기)
+          </summary>
+          <ol style={{ fontSize: 12.5, color: TEXT_DIM, lineHeight: 1.9, paddingLeft: 18, marginTop: 10 }}>
+            <li>
+              구글 시트 접속 후 상단 메뉴의 <b>확장 프로그램 (Extensions) → Apps Script</b>를 선택합니다.
+            </li>
+            <li>
+              위의 <b>[코드 복사하기]</b> 버튼을 눌러 복사한 스크립트를 전체 붙여넣기합니다.
+            </li>
+            <li>
+              코드 상단의 <span className="mono" style={{ color: TEXT_MAIN }}>INVENTORY_SHEET_NAME</span> 값을 실제 시트 탭 이름(예: "시트1")으로 수정하고 저장합니다.
+            </li>
+            <li>
+              우측 상단의 <b>배포 (Deploy) → 새 배포 (New Deployment)</b>를 누릅니다.
+            </li>
+            <li>
+              유형 선택 톱니바퀴에서 <b>웹 앱 (Web App)</b>을 고르고, 실행 사용자는 <b>나 (Me)</b>, 액세스할 수 있는 사람은 <b>모든 사람 (Anyone)</b>으로 지정해 배포를 누릅니다.
+            </li>
+            <li>
+              생성된 <b>웹 앱 URL</b>을 아래 입력란에 넣고 연동을 시작합니다.
+            </li>
+          </ol>
+        </details>
+
+        <label style={{ fontSize: 12, color: TEXT_DIM, display: "block", marginBottom: 6 }}>
+          Apps Script 웹앱 URL (웹 앱 주소)
+        </label>
+        <input
+          value={scriptUrl}
+          onChange={(e) => setScriptUrl(e.target.value)}
+          placeholder="https://script.google.com/macros/s/AKfycb.../exec"
+          style={{
+            width: "100%",
+            marginBottom: 8,
+            background: "var(--input-bg, #0f172a)",
+            border: `1px solid ${PANEL_BORDER}`,
+            color: "var(--text-main, #f1f5f9)",
+            padding: "8px 12px",
+            borderRadius: "6px",
+            fontSize: "13px"
+          }}
+        />
+        {connectError && <div style={{ fontSize: 12, color: DANGER, marginBottom: 8 }}>{connectError}</div>}
+
+        <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+          <button
+            onClick={onConnect}
+            disabled={connecting}
+            style={{
+              flex: 1,
+              background: OK,
+              border: `1px solid ${OK}`,
+              color: "#020617",
+              borderRadius: 7,
+              padding: "11px 0",
+              fontSize: 13.5,
+              fontWeight: 600,
+              opacity: connecting ? 0.7 : 1,
+              cursor: "pointer",
+            }}
+          >
+            {connecting ? "연동 확인 중..." : connected ? "다시 연동하기" : "연동하기"}
+          </button>
+          {connected && (
+            <button
+              onClick={onDisconnect}
+              style={{
+                flex: 1,
+                background: "transparent",
+                border: `1px solid ${PANEL_BORDER}`,
+                color: TEXT_DIM,
+                borderRadius: 7,
+                padding: "11px 0",
+                fontSize: 13.5,
+                cursor: "pointer",
+              }}
+            >
+              연동 해제 (로컬 모드)
+            </button>
+          )}
+        </div>
+
+        {!connected && (
+          <div style={{ fontSize: 11.5, color: TEXT_DIM, marginTop: 14, lineHeight: 1.6, textAlign: "center" }}>
+            연동을 하지 않고도 우측 상단의 ✕ 를 눌러 데모 데이터로 가상 테스트를 진행할 수 있습니다.
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
