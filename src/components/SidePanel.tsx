@@ -53,6 +53,19 @@ export default function SidePanel({
   const [isSettingsExpanded, setIsSettingsExpanded] = useState(false);
   const [zoomImageUrl, setZoomImageUrl] = useState<string | null>(null);
   const [zoomImageName, setZoomImageName] = useState<string>("");
+  const [editingStockItemRowIndex, setEditingStockItemRowIndex] = useState<number | null>(null);
+  const [editingStockValue, setEditingStockValue] = useState<string>("");
+
+  const handleSaveStockInline = (item: InventoryItem) => {
+    setEditingStockItemRowIndex(null);
+    const parsed = parseInt(editingStockValue, 10);
+    if (isNaN(parsed) || parsed < 0) return;
+    const currentStock = item.stock ?? 0;
+    const delta = parsed - currentStock;
+    if (delta !== 0) {
+      onChangeStock(item, delta);
+    }
+  };
 
   useEffect(() => {
     if (rack) {
@@ -536,18 +549,69 @@ export default function SidePanel({
                                   >
                                     −
                                   </button>
-                                  <span
-                                    className="mono"
-                                    style={{
-                                      fontSize: "12.5px",
-                                      fontWeight: 700,
-                                      minWidth: 26,
-                                      textAlign: "center",
-                                      color: item.stock === 0 ? DANGER : item.stock === null ? TEXT_DIM : OK,
-                                    }}
-                                  >
-                                    {item.stock === null ? "N/A" : item.stock}
-                                  </span>
+                                  {editingStockItemRowIndex === item.rowIndex ? (
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      value={editingStockValue}
+                                      onChange={(e) => setEditingStockValue(e.target.value)}
+                                      onBlur={() => handleSaveStockInline(item)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") {
+                                          handleSaveStockInline(item);
+                                        } else if (e.key === "Escape") {
+                                          setEditingStockItemRowIndex(null);
+                                        }
+                                      }}
+                                      autoFocus
+                                      style={{
+                                        width: "48px",
+                                        background: isLightMode ? "#ffffff" : "#020617",
+                                        border: `1.5px solid ${ACCENT}`,
+                                        borderRadius: "4px",
+                                        color: isLightMode ? "#0f172a" : "#ffffff",
+                                        textAlign: "center",
+                                        fontSize: "12px",
+                                        fontWeight: 700,
+                                        outline: "none",
+                                        padding: "1px 2px",
+                                      }}
+                                    />
+                                  ) : (
+                                    <span
+                                      className="mono"
+                                      onClick={() => {
+                                        if (typeof item.stock === "number") {
+                                          setEditingStockItemRowIndex(item.rowIndex);
+                                          setEditingStockValue(String(item.stock));
+                                        }
+                                      }}
+                                      title="수량 직접 입력하려면 클릭"
+                                      style={{
+                                        fontSize: "12.5px",
+                                        fontWeight: 700,
+                                        minWidth: 26,
+                                        textAlign: "center",
+                                        color: item.stock === 0 ? DANGER : item.stock === null ? TEXT_DIM : OK,
+                                        cursor: "pointer",
+                                        padding: "2px 6px",
+                                        borderRadius: "4px",
+                                        background: isLightMode ? "rgba(0,0,0,0.03)" : "rgba(255,255,255,0.05)",
+                                        border: "1px solid transparent",
+                                        transition: "all 0.15s",
+                                      }}
+                                      onMouseEnter={(e) => {
+                                        e.currentTarget.style.border = `1px dashed ${ACCENT}`;
+                                        e.currentTarget.style.background = isLightMode ? "rgba(99, 102, 241, 0.08)" : "rgba(99, 102, 241, 0.15)";
+                                      }}
+                                      onMouseLeave={(e) => {
+                                        e.currentTarget.style.border = "1px solid transparent";
+                                        e.currentTarget.style.background = isLightMode ? "rgba(0,0,0,0.03)" : "rgba(255,255,255,0.05)";
+                                      }}
+                                    >
+                                      {item.stock === null ? "N/A" : item.stock}
+                                    </span>
+                                  )}
                                   <button
                                     onClick={() => onChangeStock(item, 1)}
                                     disabled={typeof item.stock !== "number"}
