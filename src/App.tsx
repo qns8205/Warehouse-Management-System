@@ -27,6 +27,10 @@ import {
   Package,
   Sun,
   Moon,
+  ExternalLink,
+  QrCode,
+  Smartphone,
+  ArrowLeft,
 } from "lucide-react";
 
 const DEFAULT_SCRIPT_URL = (import.meta as any).env?.VITE_SCRIPT_URL || "https://script.google.com/macros/s/AKfycbwc5YXabteLtTakGJqNo74AHD_AchtBw1bLlXEBiwmyk7CVdKsesrqSx8FZMOM1LrhuYQ/exec";
@@ -90,7 +94,7 @@ const DEMO_RENT_LOGS: RentLog[] = [
    ============================================================ */
 export default function App() {
   // 1. 상태 선언
-  const [currentView, setCurrentView] = useState<"landing" | "login" | "rental" | "monitor" | "defect" | "rent">("landing");
+  const [currentView, setCurrentView] = useState<"landing" | "login" | "rental" | "monitor" | "defect" | "rent">("login");
   const [users, setUsers] = useState<WmsUser[]>(() => {
     const cached = localStorage.getItem("wms_cached_users");
     return cached ? JSON.parse(cached) : [{ id: "admin", password: "1234" }];
@@ -208,6 +212,7 @@ export default function App() {
   const [displayMode, setDisplayMode] = useState<"grid" | "canvas">("grid");
 
   // 2. Refs
+  const pendingUpdates = useRef<{ [rowIndex: number]: { stock: number; expiry: number } }>({});
   const canvasRef = useRef<HTMLDivElement>(null);
   const dragState = useRef<{ id: string; startX: number; startY: number; origX: number; origY: number; zoom: number } | null>(null);
   const rotateState = useRef<{ id: string; cx: number; cy: number; startAngle: number } | null>(null);
@@ -313,30 +318,77 @@ export default function App() {
   async function callScript(action: string, payload: any) {
     if (!scriptUrl) throw new Error("구글 스프레드시트 연동 URL이 입력되지 않았습니다.");
     
-    const res = await fetch(scriptUrl, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" }, // CORS 프리플라이트를 피하기 위한 text/plain 설정
-      body: JSON.stringify({ action, payload }),
-    });
+    let res;
+    try {
+      res = await fetch(scriptUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" }, // CORS 프리플라이트를 피하기 위한 text/plain 설정
+        body: JSON.stringify({ action, payload }),
+      });
+    } catch (e: any) {
+      throw new Error(`스프레드시트 서버 연결 실패: ${e.message}. 네트워크 상태나 CORS 설정을 확인하세요.`);
+    }
     
-    const data = await res.json();
+    const text = await res.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      console.error("Non-JSON Response received:", text);
+      if (text.includes("Google Accounts") || text.includes("login") || text.includes("Sign in")) {
+        throw new Error("구글 웹앱 배포 설정이 잘못되었습니다. 웹앱을 배포할 때 '액세스 권한이 있는 사용자'를 반드시 '모든 사용자(Anyone)'로 설정하고 승인하셔야 합니다. 그렇지 않으면 외부 로그인이 요구되어 연동이 실패합니다.");
+      }
+      throw new Error(`스프레드시트가 올바르지 않은 응답(HTML)을 반환했습니다. 웹앱을 '새 버전'으로 배포하고 최신 배포 URL을 올바르게 등록했는지 확인하세요.`);
+    }
+    
     if (!data.success) throw new Error(data.error || "스프레드시트 요청 실패");
     return data;
   }
 
   async function fetchAll() {
     if (!scriptUrl) throw new Error("연동 URL이 비어 있습니다.");
-    const res = await fetch(`${scriptUrl}?action=getAll`);
-    const data = await res.json();
+    
+    let res;
+    try {
+      res = await fetch(`${scriptUrl}?action=getAll`);
+    } catch (e: any) {
+      throw new Error(`스프레드시트 연결 실패: ${e.message}`);
+    }
+    
+    const text = await res.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      console.error("Non-JSON Response received on fetchAll:", text);
+      if (text.includes("Google Accounts") || text.includes("login") || text.includes("Sign in")) {
+        throw new Error("구글 웹앱 배포 설정이 잘못되었습니다. 웹앱을 배포할 때 '액세스 권한이 있는 사용자'를 '모든 사용자(Anyone)'로 설정해 주세요.");
+      }
+      throw new Error(`올바르지 않은 데이터 형식입니다. 웹앱 URL 및 배포 설정을 확인하세요.`);
+    }
+    
     if (!data.success) throw new Error(data.error || "스프레드시트 조회 실패");
     return data;
+  }
+
+  // 서버에서 받은 인벤토리 데이터와 아직 반영 중인 로컬의 최신 재고(낙관적 업데이트)를 병합하여 깜빡임 방지
+  function mergePendingStocks(serverInv: InventoryItem[]): InventoryItem[] {
+    const now = Date.now();
+    return serverInv.map((item) => {
+      const pending = pendingUpdates.current[item.rowIndex];
+      if (pending && now < pending.expiry) {
+        return { ...item, stock: pending.stock };
+      }
+      return item;
+    });
   }
 
   // 백그라운드 무소음 리프레시 (사용자 흐름 방해 없이 자동 싱크)
   async function silentRefresh() {
     try {
       const data = await fetchAll();
-      const inv = data.inventory && data.inventory.length > 0 ? data.inventory : DEMO_INVENTORY;
+      const rawInv = data.inventory && data.inventory.length > 0 ? data.inventory : DEMO_INVENTORY;
+      const inv = mergePendingStocks(rawInv);
       setInventory(inv);
       if (data.sectors && data.sectors.length > 0) {
         setRacks(racksFromServerSectors(data.sectors, inv));
@@ -404,7 +456,8 @@ export default function App() {
     setConnectError("");
     try {
       const data = await fetchAll();
-      const inv = data.inventory && data.inventory.length > 0 ? data.inventory : DEMO_INVENTORY;
+      const rawInv = data.inventory && data.inventory.length > 0 ? data.inventory : DEMO_INVENTORY;
+      const inv = mergePendingStocks(rawInv);
       setInventory(inv);
       
       let nextRacks: Rack[] = [];
@@ -453,7 +506,8 @@ export default function App() {
     showToast("스프레드시트 동기화 진행 중...", "info");
     try {
       const data = await fetchAll();
-      const inv = data.inventory || [];
+      const rawInv = data.inventory || [];
+      const inv = mergePendingStocks(rawInv);
       setInventory(inv);
       if (data.sectors && data.sectors.length > 0) {
         setRacks(racksFromServerSectors(data.sectors, inv));
@@ -804,44 +858,57 @@ export default function App() {
   /* ---------------- 품목 추가 / 수정 / 삭제 실시간 연동 ---------------- */
   async function saveInventoryItem(item: Omit<InventoryItem, "rowIndex"> & { rowIndex?: number }) {
     const isNew = !item.rowIndex;
-    setSaving(true);
-    try {
-      if (connected) {
-        if (isNew) {
-          await callScript("addInventoryItem", item);
-        } else {
-          await callScript("updateInventoryItem", item);
-        }
-        // 최신 인벤토리 실시간 재동기화
-        const data = await fetchAll();
-        setInventory(data.inventory || []);
-      } else {
-        // 오프라인/데모 모드 로컬 반영
-        if (isNew) {
-          const nextRow = Math.max(0, ...inventory.map((i) => i.rowIndex)) + 1;
-          const newItem: InventoryItem = {
-            ...item,
-            rowIndex: nextRow,
-            updatedAt: formatTimestampLocal(),
-          } as InventoryItem;
-          setInventory([...inventory, newItem]);
-        } else {
-          setInventory(
-            inventory.map((i) =>
-              i.rowIndex === item.rowIndex
-                ? ({ ...i, ...item, updatedAt: formatTimestampLocal() } as InventoryItem)
-                : i
-            )
-          );
-        }
-      }
-      setEditingItem(null);
-      setShowAddForm(false);
-      showToast(isNew ? "신규 품목이 등록되었습니다." : "품목 스펙을 저장했습니다.", "ok");
-    } catch (err: any) {
-      showToast("품목 저장 실패: " + err.message, "error");
-    } finally {
-      setSaving(false);
+    const originalInventory = [...inventory]; // 실패 시 롤백용 원본 백업
+
+    // 1. 임시 로컬 데이터를 만들어 상태에 즉시 반영 (낙관적 업데이트)
+    let optimisticItem: InventoryItem;
+    if (isNew) {
+      const nextRow = Math.max(0, ...inventory.map((i) => i.rowIndex)) + 1;
+      optimisticItem = {
+        ...item,
+        rowIndex: nextRow,
+        updatedAt: formatTimestampLocal(),
+      } as InventoryItem;
+      setInventory((prev) => [...prev, optimisticItem]);
+    } else {
+      optimisticItem = {
+        ...item,
+        updatedAt: formatTimestampLocal(),
+      } as InventoryItem;
+      setInventory((prev) =>
+        prev.map((i) => (i.rowIndex === item.rowIndex ? { ...i, ...optimisticItem } : i))
+      );
+    }
+
+    // 폼 즉시 닫기 (기다리는 시간 0초 극대화)
+    setEditingItem(null);
+    setShowAddForm(false);
+    showToast(isNew ? "신규 품목 등록 중... (백그라운드 동기화)" : "품목 스펙 저장 중... (백그라운드 동기화)", "info");
+
+    // 2. 백그라운드 서버 연동 (비동기 수행)
+    if (connected) {
+      setSaving(true);
+      const action = isNew ? "addInventoryItem" : "updateInventoryItem";
+      callScript(action, item)
+        .then(async () => {
+          // 최신 인벤토리 실시간 재동기화
+          const data = await fetchAll();
+          setInventory(mergePendingStocks(data.inventory || []));
+          setLastSync(new Date());
+          localStorage.setItem("wms_last_sync", new Date().toISOString());
+          showToast(isNew ? "✅ 신규 품목 동기화 완료" : "✅ 품목 스펙 동기화 완료", "ok");
+        })
+        .catch((err: any) => {
+          console.error("백그라운드 저장 에러:", err);
+          showToast("⚠️ 실시간 동기화 실패: " + err.message + " (로컬 원본 복구)", "error");
+          setInventory(originalInventory); // 에러 발생 시 원래 상태로 복구
+        })
+        .finally(() => {
+          setSaving(false);
+        });
+    } else {
+      // 데모 모드일 때는 즉시 완료
+      showToast(isNew ? "로컬 데모 모드에 등록되었습니다." : "로컬 데모 모드에 저장되었습니다.", "ok");
     }
   }
 
@@ -849,109 +916,125 @@ export default function App() {
     if (!window.confirm("정말로 이 품목을 삭제하시겠습니까? 관련 데이터가 완전히 소멸합니다.")) {
       return;
     }
-    setSaving(true);
-    try {
-      if (connected) {
-        await callScript("deleteInventoryItem", { rowIndex });
-        const data = await fetchAll();
-        setInventory(data.inventory || []);
-      } else {
-        setInventory(inventory.filter((i) => i.rowIndex !== rowIndex));
-      }
-      showToast("선택된 품목을 안전하게 파기하였습니다.", "info");
-    } catch (err: any) {
-      showToast("삭제 실패: " + err.message, "error");
-    } finally {
-      setSaving(false);
+    const originalInventory = [...inventory];
+
+    // 1. 낙관적으로 목록에서 즉시 제거
+    setInventory((prev) => prev.filter((i) => i.rowIndex !== rowIndex));
+    showToast("품목을 목록에서 삭제하였습니다. (백그라운드 동기화)", "info");
+
+    // 2. 백그라운드 서버 연동 (비동기 수행)
+    if (connected) {
+      setSaving(true);
+      callScript("deleteInventoryItem", { rowIndex })
+        .then(async () => {
+          const data = await fetchAll();
+          setInventory(mergePendingStocks(data.inventory || []));
+          setLastSync(new Date());
+          localStorage.setItem("wms_last_sync", new Date().toISOString());
+          showToast("✅ 구글 스프레드시트 삭제 반영 완료", "ok");
+        })
+        .catch((err: any) => {
+          console.error("삭제 동기화 에러:", err);
+          showToast("⚠️ 삭제 동기화 실패: " + err.message + " (목록 원래대로 복구)", "error");
+          setInventory(originalInventory); // 에러 발생 시 복구
+        })
+        .finally(() => {
+          setSaving(false);
+        });
     }
   }
 
-  // 불량 로그 등록 및 구글 스프레드시트 기록 함수
+  // 불량 로그 등록 및 구글 스프레드시트 기록 함수 (낙관적 업데이트 반영)
   async function handleAddDefectLog(log: Omit<DefectLog, "rowIndex">) {
+    const tempIndex = Date.now();
+    const tempLog: DefectLog = {
+      ...log,
+      rowIndex: tempIndex,
+    };
+
+    // 1. 화면 반응속도 향상을 위해 낙관적 즉시 추가
+    setDefectLogs((prev) => [tempLog, ...prev]);
+    showToast("불량 로그 등록 중... (백그라운드 동기화)", "info");
+
     if (connected) {
-      try {
-        const res = await callScript("addDefectLog", log);
-        const newLog: DefectLog = {
-          ...log,
-          rowIndex: res.rowIndex,
-        };
-        setDefectLogs((prev) => [newLog, ...prev]);
-        showToast("불량 로그가 스프레드시트에 실시간으로 기록되었습니다!", "ok");
-      } catch (err: any) {
-        showToast("실시간 기록 실패: " + err.message + " (데모 모드로 임시 보존)", "error");
-        const newLog: DefectLog = { ...log, rowIndex: Date.now() };
-        setDefectLogs((prev) => [newLog, ...prev]);
-      }
+      callScript("addDefectLog", log)
+        .then((res) => {
+          // 실시간으로 받은 올바른 rowIndex로 교체
+          setDefectLogs((prev) =>
+            prev.map((l) => (l.rowIndex === tempIndex ? { ...l, rowIndex: res.rowIndex } : l))
+          );
+          setLastSync(new Date());
+          localStorage.setItem("wms_last_sync", new Date().toISOString());
+          showToast("✅ 불량 로그 스프레드시트 기록 완료", "ok");
+        })
+        .catch((err: any) => {
+          console.error("불량로그 동기화 실패:", err);
+          showToast("⚠️ 불량로그 동기화 실패: " + err.message + " (로컬 임시 보존됨)", "warn");
+        });
     } else {
-      const newLog: DefectLog = { ...log, rowIndex: Date.now() };
-      setDefectLogs((prev) => [newLog, ...prev]);
       showToast("로컬 데모 모드에 불량 로그가 추가되었습니다.", "info");
     }
   }
 
-  // 대여/반납 로그 등록 및 구글 스프레드시트 기록 함수
+  // 대여/반납 로그 등록 및 구글 스프레드시트 기록 함수 (낙관적 업데이트를 적용하여 체감 속도 극대화)
   async function handleAddRentLog(log: RentLog) {
-    if (connected) {
-      try {
-        await callScript("rentInventoryItem", log);
-        setRentLogs((prev) => [log, ...prev]);
-        
-        // Also update local inventory state with the adjusted stock
-        setInventory((prev) =>
-          prev.map((it) => {
-            if (it.location === log.location && it.name === log.name) {
-              const currentStock = it.stock === null ? 0 : it.stock;
-              const nextStock = log.type === "대여" ? Math.max(0, currentStock - log.qty) : currentStock + log.qty;
-              return {
-                ...it,
-                stock: nextStock,
-                updatedAt: log.timestamp,
-                manager: log.user,
-              };
-            }
-            return it;
-          })
-        );
-        
-        showToast("대여/반납 내역이 스프레드시트에 실시간 동기화되었습니다!", "ok");
-      } catch (err: any) {
-        showToast("실시간 동기화 실패: " + err.message + " (데모 모드로 임시 보존)", "error");
-        setRentLogs((prev) => [log, ...prev]);
-        
-        // Local state update anyway for smooth user feedback
-        setInventory((prev) =>
-          prev.map((it) => {
-            if (it.location === log.location && it.name === log.name) {
-              const currentStock = it.stock === null ? 0 : it.stock;
-              const nextStock = log.type === "대여" ? Math.max(0, currentStock - log.qty) : currentStock + log.qty;
-              return {
-                ...it,
-                stock: nextStock,
-                updatedAt: log.timestamp,
-                manager: log.user,
-              };
-            }
-            return it;
-          })
-        );
-      }
-    } else {
-      setRentLogs((prev) => [log, ...prev]);
-      setInventory((prev) =>
-        prev.map((it) => {
-          if (it.location === log.location && it.name === log.name) {
-            const currentStock = it.stock === null ? 0 : it.stock;
-            const nextStock = log.type === "대여" ? Math.max(0, currentStock - log.qty) : currentStock + log.qty;
+    const targetItem = inventory.find((it) => it.location === log.location && it.name === log.name);
+    const rIndex = targetItem?.rowIndex;
+    let nextStock: number | null = null;
+
+    if (targetItem && typeof targetItem.stock === "number") {
+      nextStock = log.type === "대여" ? Math.max(0, targetItem.stock - log.qty) : targetItem.stock + log.qty;
+    }
+
+    if (rIndex !== undefined && nextStock !== null) {
+      pendingUpdates.current[rIndex] = {
+        stock: nextStock,
+        expiry: Date.now() + 15000, // 최대 15초 동안 폴링 무시 (세이프가드)
+      };
+    }
+
+    // 1. 화면 반응속도 향상을 위해 로컬 상태(로그 목록 및 인벤토리 재고) 즉시 낙관적 업데이트
+    setRentLogs((prev) => [log, ...prev]);
+    setInventory((prev) =>
+      prev.map((it) => {
+        if (it.location === log.location && it.name === log.name) {
+          if (it.stock === null) {
             return {
               ...it,
-              stock: nextStock,
               updatedAt: log.timestamp,
-              manager: log.user,
             };
           }
-          return it;
+          const currentStock = it.stock;
+          const calculatedNext = log.type === "대여" ? Math.max(0, currentStock - log.qty) : currentStock + log.qty;
+          return {
+            ...it,
+            stock: calculatedNext,
+            updatedAt: log.timestamp,
+          };
+        }
+        return it;
+      })
+    );
+
+    if (connected) {
+      // 2. 백그라운드로 안전하게 구글 스프레드시트에 연동 요청 (동기 처리 차단 없음)
+      callScript("rentInventoryItem", log)
+        .then(() => {
+          setLastSync(new Date());
+          localStorage.setItem("wms_last_sync", new Date().toISOString());
+          showToast("스프레드시트에 실시간 동기화 완료!", "ok");
+          // 성공 후 구글 시트가 갱신 및 계산 완료될 충분한 시간을 준 후 pending 해제 (2.5초 지연)
+          if (rIndex !== undefined && pendingUpdates.current[rIndex]) {
+            pendingUpdates.current[rIndex].expiry = Date.now() + 2500;
+          }
         })
-      );
+        .catch((err: any) => {
+          showToast("스프레드시트 동기화 실패: " + err.message + " (로컬 보존 중)", "warn");
+          if (rIndex !== undefined) {
+            delete pendingUpdates.current[rIndex];
+          }
+        });
+    } else {
       showToast("로컬 데모 모드에 대여/반납 내역이 추가되었습니다.", "info");
     }
   }
@@ -963,6 +1046,12 @@ export default function App() {
     if (typeof item.stock !== "number") return;
     const nextStock = Math.max(0, item.stock + delta);
     const ts = formatTimestampLocal();
+
+    // 대기열 및 완료 전까지 stale 데이터 덮어쓰기 방지
+    pendingUpdates.current[item.rowIndex] = {
+      stock: nextStock,
+      expiry: Date.now() + 15000, // 최대 15초 세이프가드
+    };
 
     // 1. 화면 반응속도 향상을 위해 낙관적 로컬 업데이트 즉시 수행
     setInventory((prev) =>
@@ -980,9 +1069,14 @@ export default function App() {
         .then(() => {
           setLastSync(new Date());
           localStorage.setItem("wms_last_sync", new Date().toISOString());
+          // 구글 시트 반영 시간 고려 2.5초 지연 후 만료 조정
+          if (pendingUpdates.current[item.rowIndex]) {
+            pendingUpdates.current[item.rowIndex].expiry = Date.now() + 2500;
+          }
         })
         .catch((err: any) => {
           showToast("수량 스프레드시트 반영 에러: " + err.message, "error");
+          delete pendingUpdates.current[item.rowIndex];
         });
     }, 600);
   }
@@ -990,7 +1084,7 @@ export default function App() {
   // 권한 없는 사용자가 관리자 화면에 접근하는 것을 제한하는 보안 감시자
   useEffect(() => {
     if (["monitor", "defect", "rent"].includes(currentView) && !isAdmin) {
-      setCurrentView("landing");
+      setCurrentView("login");
     }
   }, [currentView, isAdmin]);
 
@@ -1035,9 +1129,6 @@ export default function App() {
           localStorage.setItem("wms_is_admin", "true");
           setCurrentView("monitor");
           showToast("관리자 모드로 안전하게 로그인되었습니다.", "ok");
-        }}
-        onBack={() => {
-          setCurrentView("landing");
         }}
         isLightMode={isLightMode}
         onSyncUsers={handleRefresh}
@@ -1277,8 +1368,8 @@ export default function App() {
             onClick={() => {
               setIsAdmin(false);
               localStorage.removeItem("wms_is_admin");
-              setCurrentView("landing");
-              showToast("로그아웃되었습니다. 메인 화면으로 이동합니다.", "info");
+              setCurrentView("login");
+              showToast("로그아웃되었습니다. 로그인 화면으로 이동합니다.", "info");
             }}
             style={{
               padding: "0 12px",
@@ -1476,6 +1567,7 @@ export default function App() {
             onClose={() => setCurrentView("monitor")}
             isLightMode={isLightMode}
             isAdmin={isAdmin}
+            showToast={showToast}
           />
         ) : (
           <>

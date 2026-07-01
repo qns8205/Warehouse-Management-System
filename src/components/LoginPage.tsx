@@ -5,7 +5,6 @@ import { ArrowLeft, Lock, User, RefreshCw, KeyRound } from "lucide-react";
 interface LoginPageProps {
   users: WmsUser[];
   onLoginSuccess: () => void;
-  onBack: () => void;
   isLightMode: boolean;
   onSyncUsers: () => Promise<void>;
   syncing: boolean;
@@ -14,7 +13,6 @@ interface LoginPageProps {
 export default function LoginPage({
   users,
   onLoginSuccess,
-  onBack,
   isLightMode,
   onSyncUsers,
   syncing,
@@ -62,36 +60,6 @@ export default function LoginPage({
         fontFamily: "var(--font-sans, system-ui, sans-serif)",
       }}
     >
-      <button
-        onClick={onBack}
-        style={{
-          position: "absolute",
-          top: "24px",
-          left: "24px",
-          display: "flex",
-          alignItems: "center",
-          gap: "6px",
-          background: "transparent",
-          border: "none",
-          color: isLightMode ? "#475569" : "#94a3b8",
-          fontSize: "13px",
-          fontWeight: 600,
-          cursor: "pointer",
-          padding: "8px 12px",
-          borderRadius: "8px",
-          transition: "background 0.2s",
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.background = isLightMode ? "rgba(0,0,0,0.05)" : "rgba(255,255,255,0.05)";
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = "transparent";
-        }}
-      >
-        <ArrowLeft size={16} />
-        처음 화면으로
-      </button>
-
       <div
         style={{
           width: "100%",

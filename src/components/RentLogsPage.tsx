@@ -1,6 +1,21 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useRef, useEffect } from "react";
 import { InventoryItem, RentLog } from "../types";
-import { Calendar, User, MapPin, Clipboard, Plus, Search, ArrowLeft, FileText, Check, ArrowRightLeft } from "lucide-react";
+import { 
+  Calendar, 
+  User, 
+  MapPin, 
+  Clipboard, 
+  Plus, 
+  Search, 
+  ArrowLeft, 
+  FileText, 
+  Check, 
+  ArrowRightLeft, 
+  X, 
+  ChevronDown, 
+  RotateCcw, 
+  AlertCircle 
+} from "lucide-react";
 
 interface RentLogsPageProps {
   rentLogs: RentLog[];
@@ -9,6 +24,8 @@ interface RentLogsPageProps {
   onClose: () => void;
   isLightMode: boolean;
   isAdmin: boolean;
+  showToast?: (msg: string, type: "ok" | "error" | "info" | "warn") => void;
+  isGuestMode?: boolean;
 }
 
 const PANEL_BORDER = "var(--panel-border, #334155)";
@@ -42,12 +59,149 @@ export default function RentLogsPage({
   onClose,
   isLightMode,
   isAdmin,
+  showToast,
+  isGuestMode = false,
 }: RentLogsPageProps) {
   // Search and Filter states
   const [filterQuery, setFilterQuery] = useState("");
   const [filterType, setFilterType] = useState("전체");
 
-  // Filter logs
+  // Collapsible Registration Form State (Guesst Mode defaults to true)
+  const [showAddForm, setShowAddForm] = useState(isGuestMode);
+  
+  // Registration Form Fields
+  const [rentUser, setRentUser] = useState("");
+  const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [rentQty, setRentQty] = useState(1);
+  const [actionType, setActionType] = useState<"대여" | "반납">("대여");
+  const [noteInput, setNoteInput] = useState("");
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  // Instant Return Trackers (prevents double clicking and gives visual checkmark)
+  const [returnedTimestamps, setReturnedTimestamps] = useState<string[]>([]);
+  const [returningStates, setReturningStates] = useState<{ [key: string]: boolean }>({});
+
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close item dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Filter inventory for dropdown autocomplete
+  const filteredInventoryItems = useMemo(() => {
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return inventory;
+    return inventory.filter(
+      (item) =>
+        item.name.toLowerCase().includes(q) ||
+        item.location.toLowerCase().includes(q)
+    );
+  }, [inventory, searchQuery]);
+
+  // Handle local form submission
+  const handleFormSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!rentUser.trim()) {
+      showToast?.("신청자 성함을 입력해 주세요.", "warn");
+      return;
+    }
+    if (!selectedItem) {
+      showToast?.("대여 또는 반납할 품목을 선택해 주세요.", "warn");
+      return;
+    }
+    if (rentQty <= 0) {
+      showToast?.("수량은 1개 이상이어야 합니다.", "warn");
+      return;
+    }
+
+    // N/A가 아닐 때만 재고 제약 적용 (Bypass if null/N/A)
+    if (actionType === "대여" && selectedItem.stock !== null) {
+      if (selectedItem.stock <= 0) {
+        showToast?.("선택한 품목의 현재고가 부족하여 대여할 수 없습니다.", "error");
+        return;
+      }
+      if (rentQty > selectedItem.stock) {
+        showToast?.(`현재고(${selectedItem.stock}개)를 초과하여 대여할 수 없습니다.`, "warn");
+        return;
+      }
+    }
+
+    setSubmitting(true);
+    try {
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const customTsStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+
+      const log: RentLog = {
+        timestamp: customTsStr,
+        location: selectedItem.location,
+        name: selectedItem.name,
+        type: actionType,
+        qty: rentQty,
+        user: rentUser.trim(),
+        note: noteInput.trim() || `${actionType} 등록`,
+      };
+
+      await onAddRentLog(log);
+      
+      showToast?.(`${selectedItem.name} ${rentQty}개 ${actionType} 등록이 완료되었습니다.`, "ok");
+      
+      // Reset form (except manager name for successive logging convenience)
+      setSelectedItem(null);
+      setRentQty(1);
+      setNoteInput("");
+      setSearchQuery("");
+      setShowAddForm(false);
+    } catch (err: any) {
+      showToast?.("등록 실패: " + err.message, "error");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Instant Return execution
+  const handleInstantReturn = async (log: RentLog) => {
+    if (returningStates[log.timestamp] || returnedTimestamps.includes(log.timestamp)) return;
+
+    setReturningStates((prev) => ({ ...prev, [log.timestamp]: true }));
+    showToast?.(`${log.name} 즉시 반납 진행 중...`, "info");
+
+    try {
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const customTsStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+
+      const returnLog: RentLog = {
+        timestamp: customTsStr,
+        location: log.location,
+        name: log.name,
+        type: "반납",
+        qty: log.qty,
+        user: log.user,
+        note: `[즉시반납] ${formatTimestampToMinutes(log.timestamp)} 대여 건 반납 완료`,
+      };
+
+      await onAddRentLog(returnLog);
+      setReturnedTimestamps((prev) => [...prev, log.timestamp]);
+      showToast?.(`${log.name} 반납 처리가 즉시 완료되었습니다!`, "ok");
+    } catch (err: any) {
+      showToast?.("반납 실패: " + err.message, "error");
+    } finally {
+      setReturningStates((prev) => ({ ...prev, [log.timestamp]: false }));
+    }
+  };
+
+  // Filter logs for table rendering
   const filteredLogs = useMemo(() => {
     return rentLogs.filter((log) => {
       const matchesQuery =
@@ -83,6 +237,8 @@ export default function RentLogsPage({
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
+          flexWrap: "wrap",
+          gap: "12px",
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -100,22 +256,336 @@ export default function RentLogsPage({
             }}
           >
             <ArrowLeft size={16} />
-            돌아가기
+            {isGuestMode ? "로그인 화면으로" : "돌아가기"}
           </button>
           <div style={{ width: 1, height: 16, background: PANEL_BORDER }} />
           <h1 style={{ fontSize: 16, fontWeight: 800, color: TEXT_MAIN, display: "flex", alignItems: "center", gap: 6 }}>
             <ArrowRightLeft size={18} style={{ color: ACCENT }} />
-            📦 물품 대여 및 반납 대장
+            {isGuestMode ? "📦 외부인 대여 및 반납 간편 신청대장" : "📦 물품 대여 및 반납 대장 관리"}
           </h1>
         </div>
-        <div style={{ fontSize: 11, color: TEXT_DIM }}>
-          스프레드시트 연동 중
-        </div>
+
+        <button
+          onClick={() => setShowAddForm((prev) => !prev)}
+          style={{
+            background: showAddForm ? "rgba(239, 68, 68, 0.15)" : `rgba(99, 102, 241, 0.15)`,
+            color: showAddForm ? DANGER : ACCENT,
+            border: `1px solid ${showAddForm ? "rgba(239, 68, 68, 0.3)" : "rgba(99, 102, 241, 0.3)"}`,
+            borderRadius: "8px",
+            padding: "6px 14px",
+            fontSize: "12px",
+            fontWeight: 700,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            gap: "5px",
+            transition: "all 0.15s",
+          }}
+        >
+          {showAddForm ? (
+            <>
+              <X size={14} />
+              {isGuestMode ? "신청 입력란 접기" : "신청 폼 닫기"}
+            </>
+          ) : (
+            <>
+              <Plus size={14} />
+              {isGuestMode ? "대여/반납 신청란 열기" : "신규 대여/반납 등록"}
+            </>
+          )}
+        </button>
       </div>
 
       <div style={{ flex: 1, display: "flex", overflow: "hidden", flexDirection: "column" }}>
+        
+        {/* Collapsible Add Form */}
+        {showAddForm && (
+          <div
+            style={{
+              padding: "20px 24px",
+              background: "var(--panel-bg, #0f172a)",
+              borderBottom: `2px solid ${PANEL_BORDER}`,
+              boxShadow: "inset 0 -10px 20px -10px rgba(0,0,0,0.3)",
+              animation: "slideDown 0.2s ease-out",
+            }}
+          >
+            <form onSubmit={handleFormSubmit} style={{ maxWidth: "1100px", margin: "0 auto" }}>
+              <h3 style={{ fontSize: "14px", fontWeight: 700, color: TEXT_MAIN, marginBottom: "14px", display: "flex", alignItems: "center", gap: "6px" }}>
+                <Plus size={16} style={{ color: ACCENT }} />
+                {isGuestMode ? "외부인 대여 / 반납 직접 등록 및 신청" : "간편 신규 대여 / 반납 직접 등록"}
+              </h3>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+                  gap: "16px",
+                  alignItems: "end",
+                }}
+              >
+                {/* 1. 구분 (대여 / 반납) */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <label style={{ fontSize: "11px", fontWeight: 700, color: TEXT_DIM }}>구분</label>
+                  <div style={{ display: "flex", background: "var(--input-bg, #020617)", borderRadius: "8px", padding: "3px", border: `1px solid ${PANEL_BORDER}` }}>
+                    <button
+                      type="button"
+                      onClick={() => setActionType("대여")}
+                      style={{
+                        flex: 1,
+                        padding: "6px 0",
+                        borderRadius: "6px",
+                        border: "none",
+                        fontSize: "12px",
+                        fontWeight: 700,
+                        cursor: "pointer",
+                        background: actionType === "대여" ? ACCENT : "transparent",
+                        color: actionType === "대여" ? "#ffffff" : TEXT_DIM,
+                        transition: "all 0.15s",
+                      }}
+                    >
+                      대여
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActionType("반납")}
+                      style={{
+                        flex: 1,
+                        padding: "6px 0",
+                        borderRadius: "6px",
+                        border: "none",
+                        fontSize: "12px",
+                        fontWeight: 700,
+                        cursor: "pointer",
+                        background: actionType === "반납" ? OK : "transparent",
+                        color: actionType === "반납" ? "#ffffff" : TEXT_DIM,
+                        transition: "all 0.15s",
+                      }}
+                    >
+                      반납
+                    </button>
+                  </div>
+                </div>
+
+                {/* 2. 신청자 성함 */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <label style={{ fontSize: "11px", fontWeight: 700, color: TEXT_DIM }}>신청자 성함</label>
+                  <div style={{ position: "relative" }}>
+                    <User size={14} style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", color: TEXT_DIM }} />
+                    <input
+                      type="text"
+                      placeholder="신청자명 입력"
+                      value={rentUser}
+                      onChange={(e) => setRentUser(e.target.value)}
+                      required
+                      style={{
+                        width: "100%",
+                        padding: "7px 10px 7px 30px",
+                        borderRadius: "8px",
+                        background: "var(--input-bg, #020617)",
+                        border: `1px solid ${PANEL_BORDER}`,
+                        color: TEXT_MAIN,
+                        fontSize: "12px",
+                        outline: "none",
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* 3. 품목 검색 및 선택 */}
+                <div ref={dropdownRef} style={{ display: "flex", flexDirection: "column", gap: "6px", position: "relative" }}>
+                  <label style={{ fontSize: "11px", fontWeight: 700, color: TEXT_DIM }}>품목 검색 및 선택</label>
+                  <div
+                    onClick={() => setIsDropdownOpen(true)}
+                    style={{ position: "relative" }}
+                  >
+                    <Search size={14} style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", color: TEXT_DIM }} />
+                    <input
+                      type="text"
+                      placeholder={selectedItem ? `${selectedItem.name} (${selectedItem.location})` : "자재명/보관소 검색..."}
+                      value={searchQuery}
+                      onChange={(e) => {
+                        setSearchQuery(e.target.value);
+                        if (selectedItem) setSelectedItem(null); // 수정하기 시작하면 리셋
+                        setIsDropdownOpen(true);
+                      }}
+                      style={{
+                        width: "100%",
+                        padding: "7px 24px 7px 30px",
+                        borderRadius: "8px",
+                        background: "var(--input-bg, #020617)",
+                        border: selectedItem ? `1.5px solid ${OK}` : `1px solid ${PANEL_BORDER}`,
+                        color: selectedItem ? OK : TEXT_MAIN,
+                        fontSize: "12px",
+                        outline: "none",
+                        fontWeight: selectedItem ? 700 : "normal",
+                      }}
+                    />
+                    <ChevronDown size={14} style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", color: TEXT_DIM, cursor: "pointer" }} />
+                  </div>
+
+                  {/* Autocomplete Dropdown */}
+                  {isDropdownOpen && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: "100%",
+                        left: 0,
+                        right: 0,
+                        background: "var(--panel-bg, #0f172a)",
+                        border: `1px solid ${PANEL_BORDER}`,
+                        borderRadius: "8px",
+                        marginTop: "4px",
+                        maxHeight: "220px",
+                        overflowY: "auto",
+                        zIndex: 100,
+                        boxShadow: "0 10px 15px -3px rgba(0,0,0,0.5)",
+                      }}
+                    >
+                      {filteredInventoryItems.length === 0 ? (
+                        <div style={{ padding: "10px", fontSize: "12px", color: TEXT_DIM, textAlign: "center" }}>
+                          검색된 자재가 없습니다.
+                        </div>
+                      ) : (
+                        filteredInventoryItems.map((item) => (
+                          <div
+                            key={item.rowIndex}
+                            onClick={() => {
+                              setSelectedItem(item);
+                              setSearchQuery("");
+                              setIsDropdownOpen(false);
+                            }}
+                            style={{
+                              padding: "8px 12px",
+                              fontSize: "12px",
+                              borderBottom: `1px solid ${PANEL_BORDER}`,
+                              cursor: "pointer",
+                              color: TEXT_MAIN,
+                              display: "flex",
+                              justifyContent: "space-between",
+                              background: selectedItem?.rowIndex === item.rowIndex ? "rgba(99, 102, 241, 0.1)" : "transparent",
+                            }}
+                          >
+                            <span style={{ fontWeight: 600 }}>{item.name}</span>
+                            <span style={{ color: TEXT_DIM, fontSize: "11px" }}>
+                              위치: {item.location} | 재고: {item.stock === null ? "N/A" : `${item.stock}개`}
+                            </span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* 4. 신청 수량 */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <label style={{ fontSize: "11px", fontWeight: 700, color: TEXT_DIM }}>
+                    수량 {selectedItem && selectedItem.stock !== null && `(최대 ${selectedItem.stock}개)`}
+                  </label>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <button
+                      type="button"
+                      onClick={() => setRentQty(prev => Math.max(1, prev - 1))}
+                      style={{
+                        width: "32px",
+                        height: "32px",
+                        borderRadius: "6px",
+                        border: `1px solid ${PANEL_BORDER}`,
+                        background: "var(--input-bg, #020617)",
+                        color: TEXT_MAIN,
+                        fontWeight: "bold",
+                        cursor: "pointer",
+                      }}
+                    >
+                      −
+                    </button>
+                    <input
+                      type="number"
+                      min="1"
+                      value={rentQty}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value, 10);
+                        setRentQty(isNaN(val) || val <= 0 ? 1 : val);
+                      }}
+                      style={{
+                        width: "55px",
+                        height: "32px",
+                        borderRadius: "6px",
+                        background: "var(--input-bg, #020617)",
+                        border: `1px solid ${PANEL_BORDER}`,
+                        color: TEXT_MAIN,
+                        textAlign: "center",
+                        fontSize: "12px",
+                        fontWeight: 700,
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setRentQty(prev => prev + 1)}
+                      style={{
+                        width: "32px",
+                        height: "32px",
+                        borderRadius: "6px",
+                        border: `1px solid ${PANEL_BORDER}`,
+                        background: "var(--input-bg, #020617)",
+                        color: TEXT_MAIN,
+                        fontWeight: "bold",
+                        cursor: "pointer",
+                      }}
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+
+                {/* 5. 사유 / 비고 */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <label style={{ fontSize: "11px", fontWeight: 700, color: TEXT_DIM }}>비고 (사유 등)</label>
+                  <input
+                    type="text"
+                    placeholder="대여/반납 목적 또는 사유 기입"
+                    value={noteInput}
+                    onChange={(e) => setNoteInput(e.target.value)}
+                    style={{
+                      width: "100%",
+                      padding: "7px 10px",
+                      borderRadius: "8px",
+                      background: "var(--input-bg, #020617)",
+                      border: `1px solid ${PANEL_BORDER}`,
+                      color: TEXT_MAIN,
+                      fontSize: "12px",
+                      outline: "none",
+                    }}
+                  />
+                </div>
+
+                {/* 6. 제출 버튼 */}
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  style={{
+                    height: "32px",
+                    background: actionType === "대여" ? ACCENT : OK,
+                    color: "#ffffff",
+                    border: "none",
+                    borderRadius: "8px",
+                    fontSize: "12px",
+                    fontWeight: 800,
+                    cursor: submitting ? "not-allowed" : "pointer",
+                    padding: "0 16px",
+                    boxShadow: "0 4px 10px rgba(0,0,0,0.15)",
+                    opacity: submitting ? 0.7 : 1,
+                  }}
+                >
+                  {submitting ? "등록 중..." : `${actionType} 등록 완료`}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
         {/* Right Side: Logs Search Table */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: "24px", overflow: "hidden" }}>
+          
           {/* Filters Bar */}
           <div
             style={{
@@ -193,62 +663,125 @@ export default function RentLogsPage({
                     <th style={{ textAlign: "center", padding: "10px 14px", color: TEXT_DIM, fontWeight: 600 }}>수량</th>
                     <th style={{ textAlign: "left", padding: "10px 14px", color: TEXT_DIM, fontWeight: 600 }}>신청자</th>
                     <th style={{ textAlign: "left", padding: "10px 14px", color: TEXT_DIM, fontWeight: 600 }}>사유 / 비고</th>
+                    <th style={{ textAlign: "center", padding: "10px 14px", color: TEXT_DIM, fontWeight: 600, width: "110px" }}>즉시 반납</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredLogs.length === 0 ? (
                     <tr>
-                      <td colSpan={7} style={{ textAlign: "center", padding: "40px", color: TEXT_DIM }}>
+                      <td colSpan={8} style={{ textAlign: "center", padding: "40px", color: TEXT_DIM }}>
                         <FileText size={24} style={{ margin: "0 auto 8px", opacity: 0.3, display: "block" }} />
                         조회된 대여/반납 로그 기록이 없습니다.
                       </td>
                     </tr>
                   ) : (
-                    filteredLogs.map((log, index) => (
-                      <tr
-                        key={index}
-                        style={{
-                          borderBottom: `1px solid ${PANEL_BORDER}`,
-                          background: index % 2 === 1 ? "rgba(255,255,255,0.01)" : "transparent",
-                        }}
-                      >
-                        <td style={{ padding: "11px 14px", color: TEXT_DIM, whiteSpace: "nowrap" }}>
-                          {formatTimestampToMinutes(log.timestamp)}
-                        </td>
-                        <td style={{ padding: "11px 14px" }}>
-                          <span
-                            style={{
-                              display: "inline-block",
-                              padding: "2px 6px",
-                              borderRadius: 4,
-                              fontSize: 10,
-                              fontWeight: 800,
-                              background: log.type === "대여" ? "rgba(99, 102, 241, 0.15)" : "rgba(16, 185, 129, 0.15)",
-                              color: log.type === "대여" ? ACCENT : OK,
-                            }}
-                          >
-                            {log.type === "대여" ? "대여" : "반납"}
-                          </span>
-                        </td>
-                        <td style={{ padding: "11px 14px", color: TEXT_MAIN, fontWeight: 600 }}>
-                          {log.name}
-                        </td>
-                        <td style={{ padding: "11px 14px", color: TEXT_DIM }}>
-                          <span className="mono" style={{ fontSize: 11, background: "rgba(255,255,255,0.04)", padding: "2px 5px", borderRadius: 3 }}>
-                            {log.location || "-"}
-                          </span>
-                        </td>
-                        <td style={{ padding: "11px 14px", textAlign: "center", color: TEXT_MAIN, fontWeight: 700 }}>
-                          {log.qty}개
-                        </td>
-                        <td style={{ padding: "11px 14px", color: TEXT_MAIN }}>
-                          {log.user}
-                        </td>
-                        <td style={{ padding: "11px 14px", color: TEXT_DIM, maxWidth: "240px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={log.note}>
-                          {log.note || "-"}
-                        </td>
-                      </tr>
-                    ))
+                    filteredLogs.map((log, index) => {
+                      const isReturned = returnedTimestamps.includes(log.timestamp);
+                      const isReturning = returningStates[log.timestamp] || false;
+
+                      return (
+                        <tr
+                          key={index}
+                          style={{
+                            borderBottom: `1px solid ${PANEL_BORDER}`,
+                            background: index % 2 === 1 ? "rgba(255,255,255,0.01)" : "transparent",
+                          }}
+                        >
+                          <td style={{ padding: "11px 14px", color: TEXT_DIM, whiteSpace: "nowrap" }}>
+                            {formatTimestampToMinutes(log.timestamp)}
+                          </td>
+                          <td style={{ padding: "11px 14px" }}>
+                            <span
+                              style={{
+                                display: "inline-block",
+                                padding: "2px 6px",
+                                borderRadius: 4,
+                                fontSize: 10,
+                                fontWeight: 800,
+                                background: log.type === "대여" ? "rgba(99, 102, 241, 0.15)" : "rgba(16, 185, 129, 0.15)",
+                                color: log.type === "대여" ? ACCENT : OK,
+                              }}
+                            >
+                              {log.type === "대여" ? "대여" : "반납"}
+                            </span>
+                          </td>
+                          <td style={{ padding: "11px 14px", color: TEXT_MAIN, fontWeight: 600 }}>
+                            {log.name}
+                          </td>
+                          <td style={{ padding: "11px 14px", color: TEXT_DIM }}>
+                            <span className="mono" style={{ fontSize: 11, background: "rgba(255,255,255,0.04)", padding: "2px 5px", borderRadius: 3 }}>
+                              {log.location || "-"}
+                            </span>
+                          </td>
+                          <td style={{ padding: "11px 14px", textAlign: "center", color: TEXT_MAIN, fontWeight: 700 }}>
+                            {log.qty}개
+                          </td>
+                          <td style={{ padding: "11px 14px", color: TEXT_MAIN }}>
+                            {log.user}
+                          </td>
+                          <td style={{ padding: "11px 14px", color: TEXT_DIM, maxWidth: "240px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={log.note}>
+                            {log.note || "-"}
+                          </td>
+                          <td style={{ padding: "11px 14px", textAlign: "center" }}>
+                            {log.type === "대여" ? (
+                              isReturned ? (
+                                <button
+                                  disabled
+                                  style={{
+                                    background: isLightMode ? "rgba(16, 185, 129, 0.05)" : "rgba(16, 185, 129, 0.08)",
+                                    color: isLightMode ? "rgba(16, 185, 129, 0.6)" : "rgba(16, 185, 129, 0.5)",
+                                    border: isLightMode ? "1px solid rgba(16, 185, 129, 0.25)" : "1px solid rgba(16, 185, 129, 0.2)",
+                                    borderRadius: "6px",
+                                    padding: "4px 8px",
+                                    fontSize: "11px",
+                                    fontWeight: 700,
+                                    cursor: "not-allowed",
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: "3px",
+                                  }}
+                                >
+                                  <Check size={12} />
+                                  반납 완료
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => handleInstantReturn(log)}
+                                  disabled={isReturning}
+                                  style={{
+                                    background: isReturning ? "rgba(165,180,252,0.1)" : "rgba(16, 185, 129, 0.15)",
+                                    color: isReturning ? TEXT_DIM : OK,
+                                    border: `1px solid ${isReturning ? "transparent" : "rgba(16, 185, 129, 0.3)"}`,
+                                    borderRadius: "6px",
+                                    padding: "4px 8px",
+                                    fontSize: "11px",
+                                    fontWeight: 700,
+                                    cursor: isReturning ? "not-allowed" : "pointer",
+                                    transition: "all 0.15s",
+                                  }}
+                                  onMouseEnter={(e) => {
+                                    if (!isReturning) {
+                                      e.currentTarget.style.background = OK;
+                                      e.currentTarget.style.color = "#ffffff";
+                                    }
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    if (!isReturning) {
+                                      e.currentTarget.style.background = "rgba(16, 185, 129, 0.15)";
+                                      e.currentTarget.style.color = OK;
+                                    }
+                                  }}
+                                >
+                                  {isReturning ? "처리 중" : "즉시 반납"}
+                                </button>
+                              )
+                            ) : (
+                              <span style={{ color: TEXT_DIM }}>-</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
                   )}
                 </tbody>
               </table>
@@ -257,11 +790,24 @@ export default function RentLogsPage({
             {/* Table Footer */}
             <div style={{ padding: "10px 14px", borderTop: `1px solid ${PANEL_BORDER}`, display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--input-bg, #020617)", fontSize: 11, color: TEXT_DIM }}>
               <div>전체 로그: {rentLogs.length}건 / 필터 결과: {filteredLogs.length}건</div>
-              <div>대여 로그는 구글 스프레드시트의 <strong>RentLog</strong> 시트에 실시간 동기화됩니다.</div>
+              <div>
+                {isGuestMode 
+                  ? "대여 및 반납 신청은 구글 스프레드시트에 즉시 저장되며, 실시간 재고에 자동 연동됩니다." 
+                  : <>대여 로그는 구글 스프레드시트의 <strong>RentLog</strong> 시트에 실시간 동기화됩니다.</>
+                }
+              </div>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Animation Styles */}
+      <style>{`
+        @keyframes slideDown {
+          from { opacity: 0; transform: translateY(-10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
     </div>
   );
 }
