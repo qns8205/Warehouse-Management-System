@@ -83,6 +83,79 @@ export default function RentLogsPage({
   const [returnedTimestamps, setReturnedTimestamps] = useState<string[]>([]);
   const [returningStates, setReturningStates] = useState<{ [key: string]: boolean }>({});
 
+  // Dynamically compute returned timestamps from the logs history (handles refresh/initial load)
+  const computedReturnedTimestamps = useMemo(() => {
+    const returnedSet = new Set<string>();
+
+    // Sort all rentLogs chronologically (oldest first)
+    const chronoLogs = [...rentLogs].sort((a, b) => {
+      const timeA = a.timestamp || "";
+      const timeB = b.timestamp || "";
+      return timeA.localeCompare(timeB);
+    });
+
+    const outstanding: { [key: string]: Array<{ timestamp: string; qty: number; remainingQty: number }> } = {};
+
+    for (const log of chronoLogs) {
+      if (!log.name || !log.user) continue;
+      const key = `${log.name.trim()}||${log.user.trim()}`;
+      const logQty = Number(log.qty) || 0;
+
+      if (log.type === "대여") {
+        if (!outstanding[key]) {
+          outstanding[key] = [];
+        }
+        outstanding[key].push({
+          timestamp: log.timestamp,
+          qty: logQty,
+          remainingQty: logQty,
+        });
+      } else if (log.type === "반납") {
+        let matchedByNote = false;
+
+        if (log.note && log.note.includes("[즉시반납]")) {
+          const list = outstanding[key] || [];
+          for (const item of list) {
+            if (item.remainingQty > 0) {
+              const formatted = formatTimestampToMinutes(item.timestamp);
+              if (log.note.includes(formatted)) {
+                item.remainingQty = 0;
+                returnedSet.add(item.timestamp);
+                matchedByNote = true;
+                break;
+              }
+            }
+          }
+        }
+
+        if (!matchedByNote) {
+          let returnQtyRemaining = logQty;
+          const list = outstanding[key] || [];
+          for (const item of list) {
+            if (item.remainingQty > 0) {
+              const deduct = Math.min(item.remainingQty, returnQtyRemaining);
+              item.remainingQty -= deduct;
+              returnQtyRemaining -= deduct;
+              if (item.remainingQty === 0) {
+                returnedSet.add(item.timestamp);
+              }
+              if (returnQtyRemaining <= 0) {
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return Array.from(returnedSet);
+  }, [rentLogs]);
+
+  const allReturnedTimestamps = useMemo(() => {
+    const combined = new Set([...computedReturnedTimestamps, ...returnedTimestamps]);
+    return Array.from(combined);
+  }, [computedReturnedTimestamps, returnedTimestamps]);
+
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Close item dropdown when clicking outside
@@ -193,7 +266,7 @@ export default function RentLogsPage({
 
   // Instant Return execution
   const handleInstantReturn = async (log: RentLog) => {
-    if (returningStates[log.timestamp] || returnedTimestamps.includes(log.timestamp)) return;
+    if (returningStates[log.timestamp] || allReturnedTimestamps.includes(log.timestamp)) return;
 
     setReturningStates((prev) => ({ ...prev, [log.timestamp]: true }));
     showToast?.(`${log.name} 즉시 반납 진행 중...`, "info");
@@ -750,7 +823,7 @@ export default function RentLogsPage({
                     </tr>
                   ) : (
                     filteredLogs.map((log, index) => {
-                      const isReturned = returnedTimestamps.includes(log.timestamp);
+                      const isReturned = allReturnedTimestamps.includes(log.timestamp);
                       const isReturning = returningStates[log.timestamp] || false;
 
                       return (

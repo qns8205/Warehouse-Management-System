@@ -188,6 +188,7 @@ function getInventoryData(sheet) {
   
   const range = sheet.getRange(2, 1, lastRow - 1, 9);
   const values = range.getValues();
+  const displayValues = range.getDisplayValues();
   const richTextValues = range.getRichTextValues();
   const inventory = [];
   
@@ -255,7 +256,7 @@ function getInventoryData(sheet) {
       name: String(row[2] || "").trim(),
       link: itemLink,
       stock: itemStock,
-      updatedAt: row[5] ? (row[5] instanceof Date ? formatDate(row[5]) : String(row[5])) : "",
+      updatedAt: displayValues[i][5] || "",
       manager: String(row[6] || "").trim(),
       note: String(row[7] || "").trim(),
       spec: "" // Column I가 사진 링크용이 되었으므로 규격 데이터는 비워둡니다.
@@ -268,13 +269,15 @@ function getDefectLogs(sheet) {
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return [];
   
-  const values = sheet.getRange(2, 1, lastRow - 1, 6).getValues();
+  const range = sheet.getRange(2, 1, lastRow - 1, 6);
+  const values = range.getValues();
+  const displayValues = range.getDisplayValues();
   const logs = [];
   for (let i = 0; i < values.length; i++) {
     const row = values[i];
     logs.push({
       rowIndex: i + 2,
-      timestamp: row[2] ? (row[2] instanceof Date ? formatDate(row[2]) : String(row[2]).trim()) : "",
+      timestamp: displayValues[i][2] || "",
       location: "",
       name: String(row[0] || "").trim(),
       qty: row[1] === "" ? null : Number(row[1]),
@@ -309,13 +312,15 @@ function getRentLogs(sheet) {
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return [];
   
-  const values = sheet.getRange(2, 1, lastRow - 1, 7).getValues();
+  const range = sheet.getRange(2, 1, lastRow - 1, 7);
+  const values = range.getValues();
+  const displayValues = range.getDisplayValues();
   const logs = [];
   for (let i = 0; i < values.length; i++) {
     const row = values[i];
     logs.push({
       rowIndex: i + 2,
-      timestamp: row[0] ? (row[0] instanceof Date ? formatDate(row[0]) : String(row[0]).trim()) : "",
+      timestamp: displayValues[i][0] || "",
       type: String(row[1] || "대여").trim(),
       location: String(row[2] || "").trim(),
       name: String(row[3] || "").trim(),

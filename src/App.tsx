@@ -1064,6 +1064,7 @@ export default function App() {
     if (typeof item.stock !== "number") return;
     const nextStock = Math.max(0, item.stock + delta);
     const ts = formatTimestampLocal();
+    const currentUserName = currentUser ? (currentUser.name || currentUser.id) : "관리자";
 
     // 대기열 및 완료 전까지 stale 데이터 덮어쓰기 방지
     pendingUpdates.current[item.rowIndex] = {
@@ -1073,7 +1074,7 @@ export default function App() {
 
     // 1. 화면 반응속도 향상을 위해 낙관적 로컬 업데이트 즉시 수행
     setInventory((prev) =>
-      prev.map((i) => (i.rowIndex === item.rowIndex ? { ...i, stock: nextStock, updatedAt: ts } : i))
+      prev.map((i) => (i.rowIndex === item.rowIndex ? { ...i, stock: nextStock, manager: currentUserName, updatedAt: ts } : i))
     );
 
     if (!connected) return;
@@ -1083,7 +1084,7 @@ export default function App() {
     if (stockSaveTimers.current[key]) clearTimeout(stockSaveTimers.current[key]);
     
     stockSaveTimers.current[key] = setTimeout(() => {
-      callScript("updateInventoryItem", { rowIndex: item.rowIndex, stock: nextStock })
+      callScript("updateInventoryItem", { rowIndex: item.rowIndex, stock: nextStock, manager: currentUserName })
         .then(() => {
           setLastSync(new Date());
           localStorage.setItem("wms_last_sync", new Date().toISOString());

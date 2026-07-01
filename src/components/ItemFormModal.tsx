@@ -288,17 +288,13 @@ export default function ItemFormModal({
                 </button>
               </div>
             </Field>
-            <Field label="담당자 (자동 등록)" style={{ flex: 1 }}>
+            <Field label="담당자" style={{ flex: 1 }}>
               <input
                 value={form.manager}
-                readOnly
+                onChange={(e) => update("manager", e.target.value)}
                 placeholder="담당자명"
                 style={{
                   width: "100%",
-                  opacity: 0.7,
-                  cursor: "not-allowed",
-                  background: "rgba(15, 23, 42, 0.45) !important",
-                  border: "1px solid rgba(51, 65, 85, 0.5) !important",
                   height: "36px"
                 }}
               />
@@ -323,26 +319,6 @@ export default function ItemFormModal({
               onChange={(e) => update("link", e.target.value)}
               placeholder="N/A 또는 구매 URL"
               style={{ width: "100%" }}
-            />
-          </Field>
-
-          <Field label="비고 / 특이사항">
-            <textarea
-              value={form.note}
-              onChange={(e) => update("note", e.target.value)}
-              rows={2}
-              placeholder="비고란 기록"
-              style={{
-                width: "100%",
-                resize: "vertical",
-                background: "#101114",
-                color: TEXT_MAIN,
-                border: `1px solid ${PANEL_BORDER}`,
-                padding: "6px 10px",
-                borderRadius: 6,
-                fontSize: 13,
-                fontFamily: "inherit",
-              }}
             />
           </Field>
         </div>
