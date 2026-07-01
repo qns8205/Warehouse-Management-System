@@ -230,6 +230,7 @@ export default function App() {
   const rotateState = useRef<{ id: string; cx: number; cy: number; startAngle: number } | null>(null);
   const panState = useRef<{ startX: number; startY: number; origPan: { x: number; y: number } } | null>(null);
   const initializedRef = useRef(false);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
 
   // 3. 토스트 알림 표시 유틸
   const showToast = (msg: string, type: "info" | "ok" | "warn" | "error" = "info") => {
@@ -325,6 +326,21 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("wms_is_admin", String(isAdmin));
   }, [isAdmin]);
+
+  // 검색창 바깥을 클릭(또는 터치)하면 펼쳐진 검색 결과 드롭다운을 자동으로 접음
+  useEffect(() => {
+    function handleClickOutsideSearch(e: MouseEvent | TouchEvent) {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
+        setSearchOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutsideSearch);
+    document.addEventListener("touchstart", handleClickOutsideSearch);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutsideSearch);
+      document.removeEventListener("touchstart", handleClickOutsideSearch);
+    };
+  }, []);
 
   /* ---------------- Apps Script API 연동 로직 ---------------- */
   async function callScript(action: string, payload: any) {
@@ -901,7 +917,8 @@ export default function App() {
     if (connected) {
       setSaving(true);
       const action = isNew ? "addInventoryItem" : "updateInventoryItem";
-      callScript(action, item)
+      // 접속 중인 컴퓨터의 로컬 시간을 기준으로 업데이트 시간을 기록하도록 명시적으로 전달
+      callScript(action, { ...item, updatedAt: optimisticItem.updatedAt })
         .then(async () => {
           // 최신 인벤토리 실시간 재동기화
           const data = await fetchAll();
@@ -1084,7 +1101,7 @@ export default function App() {
     if (stockSaveTimers.current[key]) clearTimeout(stockSaveTimers.current[key]);
     
     stockSaveTimers.current[key] = setTimeout(() => {
-      callScript("updateInventoryItem", { rowIndex: item.rowIndex, stock: nextStock, manager: currentUserName })
+      callScript("updateInventoryItem", { rowIndex: item.rowIndex, stock: nextStock, manager: currentUserName, updatedAt: ts })
         .then(() => {
           setLastSync(new Date());
           localStorage.setItem("wms_last_sync", new Date().toISOString());
@@ -1264,7 +1281,7 @@ export default function App() {
         </div>
 
         {/* 품목 실시간 검색란 */}
-        <div style={{ position: "relative", width: 440 }}>
+        <div ref={searchContainerRef} style={{ position: "relative", width: 440 }}>
           <div
             style={{
               display: "flex",
