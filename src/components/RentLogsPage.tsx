@@ -115,23 +115,45 @@ export default function RentLogsPage({
       showToast?.("신청자 성함을 입력해 주세요.", "warn");
       return;
     }
-    if (!selectedItem) {
-      showToast?.("대여 또는 반납할 품목을 선택해 주세요.", "warn");
+
+    let activeItem = selectedItem;
+    let isTempItem = false;
+
+    if (!activeItem && searchQuery.trim()) {
+      // 드롭다운에 없는 것을 직접 입력한 경우, 임시 품목으로 자동 처리
+      activeItem = {
+        rowIndex: -1,
+        location: "기타",
+        photo: "",
+        name: searchQuery.trim(),
+        link: "N/A",
+        stock: "N/A",
+        updatedAt: "",
+        manager: "",
+        note: "리스트 외 임시 품목",
+        spec: "",
+      };
+      isTempItem = true;
+    }
+
+    if (!activeItem) {
+      showToast?.("대여 또는 반납할 품목을 선택하거나 검색창에 직접 입력해 주세요.", "warn");
       return;
     }
+
     if (rentQty <= 0) {
       showToast?.("수량은 1개 이상이어야 합니다.", "warn");
       return;
     }
 
     // N/A가 아닐 때만 재고 제약 적용 (Bypass if null/N/A)
-    if (actionType === "대여" && selectedItem.stock !== null) {
-      if (selectedItem.stock <= 0) {
+    if (actionType === "대여" && typeof activeItem.stock === "number" && activeItem.stock !== null) {
+      if (activeItem.stock <= 0) {
         showToast?.("선택한 품목의 현재고가 부족하여 대여할 수 없습니다.", "error");
         return;
       }
-      if (rentQty > selectedItem.stock) {
-        showToast?.(`현재고(${selectedItem.stock}개)를 초과하여 대여할 수 없습니다.`, "warn");
+      if (rentQty > activeItem.stock) {
+        showToast?.(`현재고(${activeItem.stock}개)를 초과하여 대여할 수 없습니다.`, "warn");
         return;
       }
     }
@@ -144,17 +166,17 @@ export default function RentLogsPage({
 
       const log: RentLog = {
         timestamp: customTsStr,
-        location: selectedItem.location,
-        name: selectedItem.name,
+        location: activeItem.location,
+        name: activeItem.name,
         type: actionType,
         qty: rentQty,
         user: rentUser.trim(),
-        note: noteInput.trim() || `${actionType} 등록`,
+        note: noteInput.trim() || `${actionType} 등록${isTempItem ? " (리스트 외 임시 품목)" : ""}`,
       };
 
       await onAddRentLog(log);
       
-      showToast?.(`${selectedItem.name} ${rentQty}개 ${actionType} 등록이 완료되었습니다.`, "ok");
+      showToast?.(`${activeItem.name} ${rentQty}개 ${actionType} 등록이 완료되었습니다.`, "ok");
       
       // Reset form (except manager name for successive logging convenience)
       setSelectedItem(null);
@@ -203,7 +225,7 @@ export default function RentLogsPage({
 
   // Filter logs for table rendering
   const filteredLogs = useMemo(() => {
-    return rentLogs.filter((log) => {
+    const filtered = rentLogs.filter((log) => {
       const matchesQuery =
         !filterQuery ||
         log.name.toLowerCase().includes(filterQuery.toLowerCase()) ||
@@ -214,6 +236,13 @@ export default function RentLogsPage({
       const matchesType = filterType === "전체" || log.type === filterType;
 
       return matchesQuery && matchesType;
+    });
+
+    // Sort by timestamp descending (newest first)
+    return [...filtered].sort((a, b) => {
+      const timeA = a.timestamp || "";
+      const timeB = b.timestamp || "";
+      return timeB.localeCompare(timeA);
     });
   }, [rentLogs, filterQuery, filterType]);
 
@@ -441,10 +470,55 @@ export default function RentLogsPage({
                         boxShadow: "0 10px 15px -3px rgba(0,0,0,0.5)",
                       }}
                     >
-                      {filteredInventoryItems.length === 0 ? (
-                        <div style={{ padding: "10px", fontSize: "12px", color: TEXT_DIM, textAlign: "center" }}>
-                          검색된 자재가 없습니다.
+                      {/* 검색어 입력 시, 목록에 없는 새로운 물건 직접 신청용 버튼 노출 */}
+                      {searchQuery.trim() !== "" && (
+                        <div
+                          onClick={() => {
+                            const tempItem: InventoryItem = {
+                              rowIndex: -1,
+                              location: "기타",
+                              photo: "",
+                              name: searchQuery.trim(),
+                              link: "N/A",
+                              stock: "N/A",
+                              updatedAt: "",
+                              manager: "",
+                              note: "리스트 외 임시 품목",
+                              spec: "",
+                            };
+                            setSelectedItem(tempItem);
+                            setSearchQuery("");
+                            setIsDropdownOpen(false);
+                          }}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "10px",
+                            padding: "10px 12px",
+                            borderBottom: `1px solid ${PANEL_BORDER}`,
+                            cursor: "pointer",
+                            background: "rgba(99, 102, 241, 0.12)",
+                            color: "#818cf8",
+                          }}
+                        >
+                          <span style={{ fontSize: "14px" }}>➕</span>
+                          <div style={{ textAlign: "left" }}>
+                            <div style={{ fontSize: "12px", fontWeight: 700 }}>
+                              "{searchQuery.trim()}" (새 임시 물품으로 직접 대여/반납 신청)
+                            </div>
+                            <div style={{ fontSize: "10px", color: TEXT_DIM }}>
+                              목록에 없으므로 임시 지정하여 대여/반납 목록에 추가합니다.
+                            </div>
+                          </div>
                         </div>
+                      )}
+
+                      {filteredInventoryItems.length === 0 ? (
+                        searchQuery.trim() === "" ? (
+                          <div style={{ padding: "10px", fontSize: "12px", color: TEXT_DIM, textAlign: "center" }}>
+                            검색된 자재가 없습니다.
+                          </div>
+                        ) : null
                       ) : (
                         filteredInventoryItems.map((item) => (
                           <div

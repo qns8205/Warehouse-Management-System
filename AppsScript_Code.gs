@@ -157,25 +157,26 @@ function getUsersData(ss) {
   if (!userSheet) {
     // Users 시트가 없다면 기본 어드민 정보로 자동 생성해 줍니다.
     userSheet = ss.insertSheet(USERS_SHEET_NAME);
-    userSheet.getRange(1, 1, 1, 2).setValues([["ID", "PASSWORD"]]);
-    userSheet.getRange(2, 1, 1, 2).setValues([["admin", "1234"]]);
+    userSheet.getRange(1, 1, 1, 3).setValues([["ID", "PASSWORD", "NAME"]]);
+    userSheet.getRange(2, 1, 1, 3).setValues([["admin", "1234", "관리자"]]);
     SpreadsheetApp.flush();
   }
   
   const lastRow = userSheet.getLastRow();
   if (lastRow < 2) {
-    return [{ id: "admin", password: "1234" }];
+    return [{ id: "admin", password: "1234", name: "관리자" }];
   }
   
-  const range = userSheet.getRange(2, 1, lastRow - 1, 2);
+  const range = userSheet.getRange(2, 1, lastRow - 1, 3);
   const values = range.getValues();
   const users = [];
   
   for (let i = 0; i < values.length; i++) {
     const id = String(values[i][0] || "").trim();
     const password = String(values[i][1] || "").trim();
+    const name = String(values[i][2] || "").trim();
     if (id) {
-      users.push({ id: id, password: password });
+      users.push({ id: id, password: password, name: name || id });
     }
   }
   return users;
@@ -240,13 +241,20 @@ function getInventoryData(sheet) {
       itemLink = String(row[3] || "").trim();
     }
     
+    let itemStock = null;
+    if (String(row[4]).trim().toUpperCase() === "N/A") {
+      itemStock = "N/A";
+    } else if (row[4] !== "" && !isNaN(Number(row[4]))) {
+      itemStock = Number(row[4]);
+    }
+
     inventory.push({
       rowIndex: rowIndex,
       location: String(row[0] || "").trim(),
       photo: photoUrl,
       name: String(row[2] || "").trim(),
       link: itemLink,
-      stock: (row[4] === "" || isNaN(Number(row[4]))) ? null : Number(row[4]),
+      stock: itemStock,
       updatedAt: row[5] ? (row[5] instanceof Date ? formatDate(row[5]) : String(row[5])) : "",
       manager: String(row[6] || "").trim(),
       note: String(row[7] || "").trim(),
@@ -343,12 +351,16 @@ function addInventoryItem(sheet, item) {
   const nextRow = lastRow + 1;
   const nowStr = formatDate(new Date());
   
+  const rawStock = (item.stock === "N/A" || String(item.stock).toUpperCase() === "N/A") 
+    ? "N/A" 
+    : (item.stock === "" || item.stock == null ? "" : Number(item.stock));
+
   const rowValues = [
     item.location || "",
     "", // Column B (B열은 참고하지 않으므로 비워둡니다)
     item.name || "",
     item.link || "",
-    item.stock === "" || item.stock == null ? "" : Number(item.stock),
+    rawStock,
     nowStr,
     item.manager || "",
     item.note || "",
@@ -373,7 +385,11 @@ function updateInventoryItem(sheet, item) {
   }
   if (item.name !== undefined) currentValues[2] = item.name;
   if (item.link !== undefined) currentValues[3] = item.link;
-  if (item.stock !== undefined) currentValues[4] = (item.stock === "" || item.stock == null) ? "" : Number(item.stock);
+  if (item.stock !== undefined) {
+    currentValues[4] = (item.stock === "N/A" || String(item.stock).toUpperCase() === "N/A")
+      ? "N/A"
+      : (item.stock === "" || item.stock == null ? "" : Number(item.stock));
+  }
   currentValues[5] = nowStr;
   if (item.manager !== undefined) currentValues[6] = item.manager;
   if (item.note !== undefined) currentValues[7] = item.note;

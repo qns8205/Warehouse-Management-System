@@ -4,7 +4,7 @@ import { ArrowLeft, Lock, User, RefreshCw, KeyRound } from "lucide-react";
 
 interface LoginPageProps {
   users: WmsUser[];
-  onLoginSuccess: () => void;
+  onLoginSuccess: (user: WmsUser) => void;
   isLightMode: boolean;
   onSyncUsers: () => Promise<void>;
   syncing: boolean;
@@ -38,7 +38,7 @@ export default function LoginPage({
     );
 
     if (matchedUser) {
-      onLoginSuccess();
+      onLoginSuccess(matchedUser);
     } else {
       setLocalError("일치하는 계정 정보가 없습니다. 다시 입력해 주세요.");
     }

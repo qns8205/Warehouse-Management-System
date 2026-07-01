@@ -4,7 +4,7 @@ export interface InventoryItem {
   photo: string;
   name: string;
   link: string;
-  stock: number | null;
+  stock: number | string | null;
   updatedAt: string;
   manager: string;
   note: string;
@@ -16,7 +16,7 @@ export interface DefectLog {
   timestamp: string;
   location: string;
   name: string;
-  qty: number | null;
+  qty: number | string | null;
   defectType: string;
   manager: string;
   note: string;
@@ -29,7 +29,7 @@ export interface RentLog {
   location: string;
   name: string;
   type: "대여" | "반납";
-  qty: number;
+  qty: number | string;
   user: string;
   note: string;
 }
@@ -37,6 +37,7 @@ export interface RentLog {
 export interface WmsUser {
   id: string;
   password?: string;
+  name?: string;
 }
 
 export interface Rack {

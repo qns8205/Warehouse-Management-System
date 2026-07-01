@@ -60,7 +60,7 @@ export default function SidePanel({
     setEditingStockItemRowIndex(null);
     const parsed = parseInt(editingStockValue, 10);
     if (isNaN(parsed) || parsed < 0) return;
-    const currentStock = item.stock ?? 0;
+    const currentStock = typeof item.stock === "number" ? item.stock : 0;
     const delta = parsed - currentStock;
     if (delta !== 0) {
       onChangeStock(item, delta);
@@ -586,14 +586,14 @@ export default function SidePanel({
                                           setEditingStockValue(String(item.stock));
                                         }
                                       }}
-                                      title="수량 직접 입력하려면 클릭"
+                                      title={typeof item.stock === "number" ? "수량 직접 입력하려면 클릭" : "N/A 수량은 직접 수정할 수 없습니다."}
                                       style={{
                                         fontSize: "12.5px",
                                         fontWeight: 700,
                                         minWidth: 26,
                                         textAlign: "center",
-                                        color: item.stock === 0 ? DANGER : item.stock === null ? TEXT_DIM : OK,
-                                        cursor: "pointer",
+                                        color: item.stock === 0 ? DANGER : (item.stock === null || item.stock === "N/A") ? TEXT_DIM : OK,
+                                        cursor: typeof item.stock === "number" ? "pointer" : "default",
                                         padding: "2px 6px",
                                         borderRadius: "4px",
                                         background: isLightMode ? "rgba(0,0,0,0.03)" : "rgba(255,255,255,0.05)",
@@ -601,15 +601,17 @@ export default function SidePanel({
                                         transition: "all 0.15s",
                                       }}
                                       onMouseEnter={(e) => {
-                                        e.currentTarget.style.border = `1px dashed ${ACCENT}`;
-                                        e.currentTarget.style.background = isLightMode ? "rgba(99, 102, 241, 0.08)" : "rgba(99, 102, 241, 0.15)";
+                                        if (typeof item.stock === "number") {
+                                          e.currentTarget.style.border = `1px dashed ${ACCENT}`;
+                                          e.currentTarget.style.background = isLightMode ? "rgba(99, 102, 241, 0.08)" : "rgba(99, 102, 241, 0.15)";
+                                        }
                                       }}
                                       onMouseLeave={(e) => {
                                         e.currentTarget.style.border = "1px solid transparent";
                                         e.currentTarget.style.background = isLightMode ? "rgba(0,0,0,0.03)" : "rgba(255,255,255,0.05)";
                                       }}
                                     >
-                                      {item.stock === null ? "N/A" : item.stock}
+                                      {item.stock === null || item.stock === "N/A" ? "N/A" : item.stock}
                                     </span>
                                   )}
                                   <button
@@ -682,7 +684,7 @@ export default function SidePanel({
                                 <div style={{ display: "flex", gap: 6, width: "100%" }}>
                                   <button
                                     onClick={() => onRentItem?.(item, "대여")}
-                                    disabled={item.stock === null || item.stock <= 0}
+                                    disabled={item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)}
                                     style={{
                                       flex: 1,
                                       background: "rgba(99, 102, 241, 0.12)",
@@ -692,8 +694,8 @@ export default function SidePanel({
                                       padding: "6px 8px",
                                       fontSize: "11.5px",
                                       fontWeight: 700,
-                                      cursor: (item.stock === null || item.stock <= 0) ? "not-allowed" : "pointer",
-                                      opacity: (item.stock === null || item.stock <= 0) ? 0.4 : 1,
+                                      cursor: (item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)) ? "not-allowed" : "pointer",
+                                      opacity: (item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)) ? 0.4 : 1,
                                       display: "flex",
                                       alignItems: "center",
                                       justifyContent: "center",

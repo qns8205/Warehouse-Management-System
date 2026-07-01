@@ -71,7 +71,7 @@ export default function DefectLogsPage({
   // Extract unique items from inventory for selection
   const uniqueItems = useMemo(() => {
     const seen = new Set<string>();
-    const items: { name: string; location: string; stock: number | null }[] = [];
+    const items: { name: string; location: string; stock: number | string | null }[] = [];
     for (const item of inventory) {
       if (item.name && !seen.has(item.name)) {
         seen.add(item.name);

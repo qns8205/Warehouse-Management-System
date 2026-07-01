@@ -8,6 +8,7 @@ interface ItemFormModalProps {
   racks: Rack[];
   onSave: (item: any) => void;
   onClose: () => void;
+  defaultManager?: string;
 }
 
 const PANEL = "var(--panel-bg, #1e293b)";
@@ -23,13 +24,14 @@ export default function ItemFormModal({
   racks,
   onSave,
   onClose,
+  defaultManager,
 }: ItemFormModalProps) {
   const initialRack = item ? parseLocation(item.location).rack : defaultRackId || (racks[0] && racks[0].id) || "";
   const initialShelfNum = item ? parseLocation(item.location).shelf : "";
 
   const [form, setForm] = useState<Omit<InventoryItem, "rowIndex"> & { rowIndex?: number }>(
     item
-      ? { ...item }
+      ? { ...item, manager: defaultManager || item.manager || "관리자" }
       : {
           location: "",
           photo: "",
@@ -37,7 +39,7 @@ export default function ItemFormModal({
           link: "N/A",
           stock: 0,
           updatedAt: "",
-          manager: "",
+          manager: defaultManager || "관리자",
           note: "",
           spec: "",
         }
@@ -249,21 +251,56 @@ export default function ItemFormModal({
 
           <div style={{ display: "flex", gap: 10 }}>
             <Field label="재고 수량" style={{ flex: 1 }}>
-              <input
-                type="number"
-                value={form.stock === null ? "" : form.stock}
-                onChange={(e) =>
-                  update("stock", e.target.value === "" ? null : Number(e.target.value))
-                }
-                style={{ width: "100%" }}
-              />
+              <div style={{ display: "flex", gap: 6 }}>
+                <input
+                  type="text"
+                  value={form.stock === null ? "" : String(form.stock)}
+                  onChange={(e) => {
+                    const val = e.target.value.trim();
+                    if (val.toUpperCase() === "N/A") {
+                      update("stock", "N/A");
+                    } else if (val === "") {
+                      update("stock", null);
+                    } else {
+                      const num = Number(val);
+                      update("stock", isNaN(num) ? val : num);
+                    }
+                  }}
+                  placeholder="숫자 또는 N/A"
+                  style={{ width: "100%", flex: 1 }}
+                />
+                <button
+                  type="button"
+                  onClick={() => update("stock", "N/A")}
+                  style={{
+                    background: form.stock === "N/A" ? "#6366f1" : "rgba(255, 255, 255, 0.05)",
+                    border: "1px solid var(--panel-border, #334155)",
+                    borderRadius: "6px",
+                    padding: "0 10px",
+                    fontSize: "11px",
+                    color: form.stock === "N/A" ? "#ffffff" : "var(--text-dim, #94a3b8)",
+                    cursor: "pointer",
+                    whiteSpace: "nowrap",
+                    height: "36px"
+                  }}
+                >
+                  N/A 지정
+                </button>
+              </div>
             </Field>
-            <Field label="담당자" style={{ flex: 1 }}>
+            <Field label="담당자 (자동 등록)" style={{ flex: 1 }}>
               <input
                 value={form.manager}
-                onChange={(e) => update("manager", e.target.value)}
+                readOnly
                 placeholder="담당자명"
-                style={{ width: "100%" }}
+                style={{
+                  width: "100%",
+                  opacity: 0.7,
+                  cursor: "not-allowed",
+                  background: "rgba(15, 23, 42, 0.45) !important",
+                  border: "1px solid rgba(51, 65, 85, 0.5) !important",
+                  height: "36px"
+                }}
               />
             </Field>
           </div>

@@ -33,7 +33,7 @@ import {
   ArrowLeft,
 } from "lucide-react";
 
-const DEFAULT_SCRIPT_URL = (import.meta as any).env?.VITE_SCRIPT_URL || "https://script.google.com/macros/s/AKfycbwc5YXabteLtTakGJqNo74AHD_AchtBw1bLlXEBiwmyk7CVdKsesrqSx8FZMOM1LrhuYQ/exec";
+const DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxt86U_xFleI59RbVu-7RMa-zQOgs2J-pLHZQ_acZkQoEdFo9tTOvNv4v9uSWMhZndFgA/exec";
 
 const DEMO_DEFECT_LOGS: DefectLog[] = [
   {
@@ -111,6 +111,10 @@ export default function App() {
     const cached = localStorage.getItem("wms_is_admin");
     return cached === "true"; // 기본은 false (대여/조회 모드)
   });
+  const [currentUser, setCurrentUser] = useState<WmsUser | null>(() => {
+    const cached = localStorage.getItem("wms_current_user");
+    return cached ? JSON.parse(cached) : null;
+  });
   const [showRentModal, setShowRentModal] = useState<{ item: InventoryItem; actionType: "대여" | "반납" } | null>(null);
   const [rentUserName, setRentUserName] = useState("");
   const [rentQty, setRentQty] = useState(1);
@@ -148,7 +152,15 @@ export default function App() {
         return queryUrl;
       }
     }
-    return localStorage.getItem("wms_script_url") || DEFAULT_SCRIPT_URL;
+    const saved = localStorage.getItem("wms_script_url");
+    if (
+      saved === "https://script.google.com/macros/s/AKfycbwc5YXabteLtTakGJqNo74AHD_AchtBw1bLlXEBiwmyk7CVdKsesrqSx8FZMOM1LrhuYQ/exec" ||
+      saved === "https://script.google.com/macros/s/AKfycby5Way2Bq9NEqxv96yDsKwgCmNw-MLh0ms0Z8XlTKEcjw4n0j4L_xPUEN42RNQDqQ686A/exec"
+    ) {
+      localStorage.setItem("wms_script_url", DEFAULT_SCRIPT_URL);
+      return DEFAULT_SCRIPT_URL;
+    }
+    return saved || DEFAULT_SCRIPT_URL;
   });
   const [connected, setConnected] = useState(() => {
     if (typeof window !== "undefined") {
@@ -900,8 +912,8 @@ export default function App() {
         })
         .catch((err: any) => {
           console.error("백그라운드 저장 에러:", err);
-          showToast("⚠️ 실시간 동기화 실패: " + err.message + " (로컬 원본 복구)", "error");
-          setInventory(originalInventory); // 에러 발생 시 원래 상태로 복구
+          showToast("⚠️ 실시간 스프레드시트 동기화 지연: " + err.message + " (로컬 캐시는 정상 저장됨)", "warn");
+          // 로컬 데이터는 보존하여 사용자의 대기 시간을 최소화하고 저장 상태를 안전하게 지킴
         })
         .finally(() => {
           setSaving(false);
@@ -935,8 +947,8 @@ export default function App() {
         })
         .catch((err: any) => {
           console.error("삭제 동기화 에러:", err);
-          showToast("⚠️ 삭제 동기화 실패: " + err.message + " (목록 원래대로 복구)", "error");
-          setInventory(originalInventory); // 에러 발생 시 복구
+          showToast("⚠️ 삭제 스프레드시트 동기화 지연: " + err.message + " (로컬 목록은 삭제 유지됨)", "warn");
+          // 로컬 목록은 지워진 상태를 그대로 유지
         })
         .finally(() => {
           setSaving(false);
@@ -983,7 +995,7 @@ export default function App() {
     let nextStock: number | null = null;
 
     if (targetItem && typeof targetItem.stock === "number") {
-      nextStock = log.type === "대여" ? Math.max(0, targetItem.stock - log.qty) : targetItem.stock + log.qty;
+      nextStock = log.type === "대여" ? Math.max(0, targetItem.stock - Number(log.qty)) : targetItem.stock + Number(log.qty);
     }
 
     if (rIndex !== undefined && nextStock !== null) {
@@ -1005,7 +1017,13 @@ export default function App() {
             };
           }
           const currentStock = it.stock;
-          const calculatedNext = log.type === "대여" ? Math.max(0, currentStock - log.qty) : currentStock + log.qty;
+          if (typeof currentStock !== "number") {
+            return {
+              ...it,
+              updatedAt: log.timestamp,
+            };
+          }
+          const calculatedNext = log.type === "대여" ? Math.max(0, currentStock - Number(log.qty)) : currentStock + Number(log.qty);
           return {
             ...it,
             stock: calculatedNext,
@@ -1124,11 +1142,13 @@ export default function App() {
     return (
       <LoginPage
         users={users}
-        onLoginSuccess={() => {
+        onLoginSuccess={(user) => {
+          setCurrentUser(user);
+          localStorage.setItem("wms_current_user", JSON.stringify(user));
           setIsAdmin(true);
           localStorage.setItem("wms_is_admin", "true");
           setCurrentView("monitor");
-          showToast("관리자 모드로 안전하게 로그인되었습니다.", "ok");
+          showToast(`${user.name || user.id} 관리자님, 환영합니다!`, "ok");
         }}
         isLightMode={isLightMode}
         onSyncUsers={handleRefresh}
@@ -1367,7 +1387,9 @@ export default function App() {
           <button
             onClick={() => {
               setIsAdmin(false);
+              setCurrentUser(null);
               localStorage.removeItem("wms_is_admin");
+              localStorage.removeItem("wms_current_user");
               setCurrentView("login");
               showToast("로그아웃되었습니다. 로그인 화면으로 이동합니다.", "info");
             }}
@@ -1810,6 +1832,7 @@ export default function App() {
             setShowAddForm(false);
             setEditingItem(null);
           }}
+          defaultManager={currentUser ? (currentUser.name || currentUser.id) : "관리자"}
         />
       )}
 
@@ -2134,7 +2157,7 @@ export default function App() {
                 <input
                   type="number"
                   min={1}
-                  max={showRentModal.actionType === "대여" ? (showRentModal.item.stock ?? 0) : undefined}
+                  max={showRentModal.actionType === "대여" ? (typeof showRentModal.item.stock === "number" ? showRentModal.item.stock : undefined) : undefined}
                   value={rentQty}
                   onChange={(e) => setRentQty(Math.max(1, parseInt(e.target.value) || 1))}
                   style={{
@@ -2147,9 +2170,9 @@ export default function App() {
                     outline: "none",
                   }}
                 />
-                {showRentModal.actionType === "대여" && rentQty > (showRentModal.item.stock ?? 0) && (
+                {showRentModal.actionType === "대여" && typeof showRentModal.item.stock === "number" && rentQty > showRentModal.item.stock && (
                   <span style={{ fontSize: "11px", color: "#f43f5e" }}>
-                    재고 수량({showRentModal.item.stock ?? 0}개)을 초과하여 대여할 수 없습니다.
+                    재고 수량({showRentModal.item.stock}개)을 초과하여 대여할 수 없습니다.
                   </span>
                 )}
               </div>
@@ -2199,7 +2222,7 @@ export default function App() {
                     showToast("담당자 이름을 입력해주세요.", "warn");
                     return;
                   }
-                  if (showRentModal.actionType === "대여" && rentQty > (showRentModal.item.stock ?? 0)) {
+                  if (showRentModal.actionType === "대여" && typeof showRentModal.item.stock === "number" && rentQty > showRentModal.item.stock) {
                     showToast("재고 수량이 부족합니다.", "warn");
                     return;
                   }
@@ -2217,7 +2240,7 @@ export default function App() {
                   handleAddRentLog(log);
                   setShowRentModal(null);
                 }}
-                disabled={showRentModal.actionType === "대여" && rentQty > (showRentModal.item.stock ?? 0)}
+                disabled={showRentModal.actionType === "대여" && typeof showRentModal.item.stock === "number" && rentQty > showRentModal.item.stock}
                 style={{
                   background: showRentModal.actionType === "대여" ? "#4f46e5" : "#10b981",
                   color: "#ffffff",
@@ -2226,7 +2249,7 @@ export default function App() {
                   fontSize: "13px",
                   fontWeight: 700,
                   cursor: "pointer",
-                  opacity: showRentModal.actionType === "대여" && rentQty > (showRentModal.item.stock ?? 0) ? 0.5 : 1,
+                  opacity: showRentModal.actionType === "대여" && typeof showRentModal.item.stock === "number" && rentQty > showRentModal.item.stock ? 0.5 : 1,
                 }}
               >
                 {showRentModal.actionType === "대여" ? "대여하기" : "반납하기"}

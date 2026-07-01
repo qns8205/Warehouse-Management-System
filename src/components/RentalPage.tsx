@@ -34,6 +34,11 @@ export default function RentalPage({
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
+  // 리스트에 없는 임시 물품 추가 모드 상태
+  const [isCustomMode, setIsCustomMode] = useState(false);
+  const [customName, setCustomName] = useState("");
+  const [customLocation, setCustomLocation] = useState("기타");
+
   // Cart for multiple items
   const [cart, setCart] = useState<{
     id: string;
@@ -80,8 +85,70 @@ export default function RentalPage({
 
   // 장바구니에 품목 임시 추가
   const handleAddToCart = () => {
-    if (!selectedItem) {
-      showToast("대여 또는 반납할 품목을 선택해 주세요.", "warn");
+    if (isCustomMode) {
+      if (!customName.trim()) {
+        showToast("물품 이름을 입력해 주세요.", "warn");
+        return;
+      }
+      if (rentQty <= 0) {
+        showToast("수량은 1개 이상이어야 합니다.", "warn");
+        return;
+      }
+
+      const customItem: InventoryItem = {
+        rowIndex: -1,
+        location: customLocation.trim() || "기타",
+        photo: "",
+        name: customName.trim(),
+        link: "N/A",
+        stock: "N/A",
+        updatedAt: "",
+        manager: "",
+        note: "리스트 외 임시 품목",
+        spec: "",
+      };
+
+      const newCartItem = {
+        id: Date.now().toString() + Math.random().toString(36).substring(2, 5),
+        item: customItem,
+        qty: rentQty,
+        type: actionType,
+        note: noteInput.trim() || `${actionType} 신청 (리스트 외 품목)`,
+      };
+
+      setCart((prev) => [...prev, newCartItem]);
+      showToast(`${customItem.name} ${rentQty}개가 신청 목록에 임시 추가되었습니다.`, "info");
+
+      // 자재 입력 영역 리셋
+      setCustomName("");
+      setCustomLocation("기타");
+      setRentQty(1);
+      setNoteInput("");
+      return;
+    }
+
+    let activeItem = selectedItem;
+    let isTempItem = false;
+
+    if (!activeItem && searchQuery.trim()) {
+      // 드롭다운에 없는 것을 직접 입력한 경우, 임시 품목으로 자동 처리
+      activeItem = {
+        rowIndex: -1,
+        location: "기타",
+        photo: "",
+        name: searchQuery.trim(),
+        link: "N/A",
+        stock: "N/A",
+        updatedAt: "",
+        manager: "",
+        note: "리스트 외 임시 품목",
+        spec: "",
+      };
+      isTempItem = true;
+    }
+
+    if (!activeItem) {
+      showToast("대여 또는 반납할 품목을 선택하거나 검색창에 직접 입력해 주세요.", "warn");
       return;
     }
     if (rentQty <= 0) {
@@ -89,9 +156,9 @@ export default function RentalPage({
       return;
     }
 
-    // 대여일 때 재고 검증
-    if (actionType === "대여") {
-      const currentStock = selectedItem.stock ?? 0;
+    // 대여일 때 재고 검증 (재고 수량이 숫자일 때만 수행)
+    if (actionType === "대여" && typeof activeItem.stock === "number") {
+      const currentStock = activeItem.stock ?? 0;
       if (currentStock <= 0) {
         showToast("선택한 물품의 현재고가 부족하여 대여할 수 없습니다.", "error");
         return;
@@ -99,7 +166,7 @@ export default function RentalPage({
       
       // 장바구니에 담긴 동일 품목의 대여 수량 합산
       const alreadyInCartQty = cart
-        .filter((c) => c.item.name === selectedItem.name && c.type === "대여")
+        .filter((c) => c.item.name === activeItem!.name && c.type === "대여")
         .reduce((acc, c) => acc + c.qty, 0);
 
       if ((rentQty + alreadyInCartQty) > currentStock) {
@@ -110,14 +177,14 @@ export default function RentalPage({
 
     const newCartItem = {
       id: Date.now().toString() + Math.random().toString(36).substring(2, 5),
-      item: selectedItem,
+      item: activeItem,
       qty: rentQty,
       type: actionType,
-      note: noteInput.trim() || `${actionType} 신청`,
+      note: noteInput.trim() || `${actionType} 신청${isTempItem ? " (리스트 외 임시 품목)" : ""}`,
     };
 
     setCart((prev) => [...prev, newCartItem]);
-    showToast(`${selectedItem.name} ${rentQty}개가 신청 목록에 임시 추가되었습니다.`, "info");
+    showToast(`${activeItem.name} ${rentQty}개가 신청 목록에 임시 추가되었습니다.`, "info");
 
     // 자재 입력 영역만 리셋 (담당자는 유지)
     setSelectedItem(null);
@@ -382,11 +449,77 @@ export default function RentalPage({
 
             {/* 대여 품목 선택 드롭다운 및 검색창 */}
             <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-              <label style={{ fontSize: "11px", fontWeight: 700, color: isLightMode ? "#475569" : "#94a3b8" }}>
-                품목 검색 및 선택 <span style={{ color: "#ef4444" }}>*</span>
-              </label>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <label style={{ fontSize: "11px", fontWeight: 700, color: isLightMode ? "#475569" : "#94a3b8" }}>
+                  품목 검색 및 선택 <span style={{ color: "#ef4444" }}>*</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsCustomMode(!isCustomMode);
+                    setSelectedItem(null);
+                  }}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "#6366f1",
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    textDecoration: "underline",
+                    padding: 0,
+                  }}
+                >
+                  {isCustomMode ? "🔍 기존 리스트에서 선택" : "✏️ 리스트에 없는 새 물건 입력"}
+                </button>
+              </div>
               
-              <div ref={dropdownRef} style={{ position: "relative" }}>
+              {isCustomMode ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: "10px", background: isLightMode ? "rgba(99, 102, 241, 0.03)" : "rgba(99, 102, 241, 0.05)", padding: "14px", borderRadius: "12px", border: `1px dashed ${isLightMode ? "#cbd5e1" : "#334155"}` }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                    <span style={{ fontSize: "10px", fontWeight: 700, color: isLightMode ? "#475569" : "#94a3b8" }}>임시 품목명</span>
+                    <input
+                      type="text"
+                      placeholder="예: 특수 고정용 고무 밴드"
+                      value={customName}
+                      onChange={(e) => setCustomName(e.target.value)}
+                      style={{
+                        width: "100%",
+                        background: isLightMode ? "#ffffff" : "#0f172a",
+                        border: `1px solid ${isLightMode ? "#cbd5e1" : "#222f4b"}`,
+                        borderRadius: "8px",
+                        padding: "8px 12px",
+                        color: isLightMode ? "#0f172a" : "#f1f5f9",
+                        fontSize: "13px",
+                        outline: "none",
+                      }}
+                    />
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                    <span style={{ fontSize: "10px", fontWeight: 700, color: isLightMode ? "#475569" : "#94a3b8" }}>보관 위치</span>
+                    <input
+                      type="text"
+                      placeholder="예: 기타, N/A, A-1-1"
+                      value={customLocation}
+                      onChange={(e) => setCustomLocation(e.target.value)}
+                      style={{
+                        width: "100%",
+                        background: isLightMode ? "#ffffff" : "#0f172a",
+                        border: `1px solid ${isLightMode ? "#cbd5e1" : "#222f4b"}`,
+                        borderRadius: "8px",
+                        padding: "8px 12px",
+                        color: isLightMode ? "#0f172a" : "#f1f5f9",
+                        fontSize: "13px",
+                        outline: "none",
+                      }}
+                    />
+                  </div>
+                  <p style={{ fontSize: "10.5px", color: isLightMode ? "#64748b" : "#94a3b8", lineHeight: "1.4", margin: 0 }}>
+                    ⚠️ 입력하신 물품명과 위치는 <strong>일회성 로그</strong>에만 기록되며, 메인 창고 자재 마스터 목록에는 저장되지 않습니다.
+                  </p>
+                </div>
+              ) : (
+                <div ref={dropdownRef} style={{ position: "relative" }}>
                 {/* 검색 필드 */}
                 <div style={{ position: "relative", marginBottom: "4px" }}>
                   <Search size={16} style={{ position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)", color: isLightMode ? "#94a3b8" : "#64748b" }} />
@@ -465,7 +598,7 @@ export default function RentalPage({
                       <div>
                         <div style={{ fontWeight: 700 }}>{selectedItem.name}</div>
                         <div style={{ fontSize: "11px", color: isLightMode ? "#64748b" : "#94a3b8" }}>
-                          위치: {selectedItem.location} | 재고: {selectedItem.stock ?? 0}개
+                          위치: {selectedItem.location} | 재고: {selectedItem.stock === "N/A" || selectedItem.stock === null ? "N/A" : `${selectedItem.stock}개`}
                         </div>
                       </div>
                     </div>
@@ -493,10 +626,66 @@ export default function RentalPage({
                       boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.2)",
                     }}
                   >
-                    {filteredItems.length === 0 ? (
-                      <div style={{ padding: "16px", textAlign: "center", fontSize: "12px", color: isLightMode ? "#64748b" : "#94a3b8" }}>
-                        일치하는 자재 품목이 없습니다.
+                    {searchQuery.trim() !== "" && (
+                      <div
+                        onClick={() => {
+                          const tempItem: InventoryItem = {
+                            rowIndex: -1,
+                            location: "기타",
+                            photo: "",
+                            name: searchQuery.trim(),
+                            link: "N/A",
+                            stock: "N/A",
+                            updatedAt: "",
+                            manager: "",
+                            note: "리스트 외 임시 품목",
+                            spec: "",
+                          };
+                          handleSelectItem(tempItem);
+                        }}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "12px",
+                          padding: "10px 12px",
+                          borderBottom: `1px solid ${isLightMode ? "#cbd5e1" : "#334155"}`,
+                          cursor: "pointer",
+                          background: isLightMode ? "rgba(99, 102, 241, 0.05)" : "rgba(99, 102, 241, 0.12)",
+                          color: "#6366f1",
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: "36px",
+                            height: "36px",
+                            borderRadius: "8px",
+                            background: "rgba(99, 102, 241, 0.15)",
+                            color: "#6366f1",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            fontSize: "14px"
+                          }}
+                        >
+                          ➕
+                        </div>
+                        <div style={{ textAlign: "left" }}>
+                          <div style={{ fontSize: "13px", fontWeight: 700 }}>
+                            "{searchQuery.trim()}" (새 임시 물품으로 직접 대여/반납 신청)
+                          </div>
+                          <div style={{ fontSize: "11px", color: isLightMode ? "#64748b" : "#94a3b8" }}>
+                            목록에 없으므로 임시 지정하여 대여/반납 목록에 추가합니다.
+                          </div>
+                        </div>
                       </div>
+                    )}
+
+                    {filteredItems.length === 0 ? (
+                      searchQuery.trim() === "" ? (
+                        <div style={{ padding: "16px", textAlign: "center", fontSize: "12px", color: isLightMode ? "#64748b" : "#94a3b8" }}>
+                          일치하는 자재 품목이 없습니다.
+                        </div>
+                      ) : null
                     ) : (
                       filteredItems.map((item) => {
                         const isSelected = selectedItem?.rowIndex === item.rowIndex;
@@ -568,6 +757,7 @@ export default function RentalPage({
                   </div>
                 )}
               </div>
+              )}
             </div>
 
             {/* 수량 입력 */}
