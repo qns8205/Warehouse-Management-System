@@ -1,840 +1,960 @@
-import React, { useState, useEffect } from "react";
-import { InventoryItem, Rack } from "../types";
-import { parseLocation, hexToRgba, getGoogleDriveImageUrl } from "../utils/drive";
-import { Trash2, Edit3, Plus, ExternalLink, Image, Package } from "lucide-react";
+import React, { useState, useMemo, useRef, useEffect } from "react";
+import { InventoryItem, RentLog } from "../types";
+import { 
+  Calendar, 
+  User, 
+  MapPin, 
+  Clipboard, 
+  Plus, 
+  Search, 
+  ArrowLeft, 
+  FileText, 
+  Check, 
+  ArrowRightLeft, 
+  X, 
+  ChevronDown, 
+  RotateCcw, 
+  AlertCircle 
+} from "lucide-react";
 
-interface SidePanelProps {
-  rack: Rack | undefined;
-  shelvesWithItems: { shelf: string; items: InventoryItem[] }[];
+interface RentLogsPageProps {
+  rentLogs: RentLog[];
+  inventory: InventoryItem[];
+  onAddRentLog: (log: RentLog) => Promise<void>;
   onClose: () => void;
-  onUpdateRack: (fields: Partial<Rack>) => void;
-  onDeleteRack: () => void;
-  onEditItem: (item: InventoryItem) => void;
-  onAddItem: () => void;
-  onDeleteItem: (rowIndex: number) => void;
-  highlightShelf: string | null;
-  highlightedItemRowIndex?: number | null;
-  onChangeStock: (item: InventoryItem, delta: number) => void;
-  isAdmin?: boolean;
-  onRentItem?: (item: InventoryItem, actionType: "대여" | "반납") => void;
-  isLightMode?: boolean;
+  isLightMode: boolean;
+  isAdmin: boolean;
+  showToast?: (msg: string, type: "ok" | "error" | "info" | "warn") => void;
+  isGuestMode?: boolean;
 }
 
-const PANEL = "var(--panel-bg, #1e293b)";
 const PANEL_BORDER = "var(--panel-border, #334155)";
 const TEXT_MAIN = "var(--text-main, #f1f5f9)";
 const TEXT_DIM = "var(--text-dim, #94a3b8)";
 const ACCENT = "#6366f1";
 const DANGER = "#f43f5e";
 const OK = "#10b981";
-const WARN = "#f59e0b";
 
-const PALETTE = ["#9CAF97", "#8FA3B8", "#D4A98C", "#AFA3C4", "#C9A0A0", "#C4B89C", "#7FB0AC", "#B8A88F"];
-
-export default function SidePanel({
-  rack,
-  shelvesWithItems,
-  onClose,
-  onUpdateRack,
-  onDeleteRack,
-  onEditItem,
-  onAddItem,
-  onDeleteItem,
-  highlightShelf,
-  highlightedItemRowIndex = null,
-  onChangeStock,
-  isAdmin = false,
-  onRentItem,
-  isLightMode = false,
-}: SidePanelProps) {
-  const [nameInput, setNameInput] = useState("");
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [expandedShelves, setExpandedShelves] = useState<{ [key: string]: boolean }>({});
-  const [isSettingsExpanded, setIsSettingsExpanded] = useState(false);
-  const [zoomImageUrl, setZoomImageUrl] = useState<string | null>(null);
-  const [zoomImageName, setZoomImageName] = useState<string>("");
-
-  useEffect(() => {
-    if (rack) {
-      setNameInput(rack.name);
-      setConfirmDelete(false);
-      // Auto-expand all shelves when a new rack is selected
-      const initialExpanded: { [key: string]: boolean } = {};
-      shelvesWithItems.forEach((s) => {
-        initialExpanded[s.shelf] = true;
-      });
-      setExpandedShelves(initialExpanded);
+function formatTimestampToMinutes(tsStr: string): string {
+  if (!tsStr) return "실시간 동기화";
+  const clean = tsStr.trim();
+  
+  try {
+    const parsedPart = clean.replace(/-/g, "/");
+    const d = new Date(parsedPart);
+    if (!isNaN(d.getTime())) {
+      const pad = (n: number) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
     }
-  }, [rack, shelvesWithItems.length]); // eslint-disable-line
-
-  useEffect(() => {
-    if (highlightShelf) {
-      setExpandedShelves((prev) => ({ ...prev, [highlightShelf]: true }));
-      // Wait a little for the side panel expansion to complete, then scroll smoothly
-      setTimeout(() => {
-        const element = document.getElementById(`shelf-container-${highlightShelf}`);
-        if (element) {
-          element.scrollIntoView({ behavior: "smooth", block: "center" });
-        }
-      }, 300);
-    }
-  }, [highlightShelf]);
-
-  useEffect(() => {
-    if (highlightedItemRowIndex !== null) {
-      // Find the shelf containing this item
-      let foundShelf: string | null = null;
-      for (const s of shelvesWithItems) {
-        if (s.items.some((it) => it.rowIndex === highlightedItemRowIndex)) {
-          foundShelf = s.shelf;
-          break;
-        }
-      }
-
-      if (foundShelf) {
-        // Expand the corresponding shelf
-        setExpandedShelves((prev) => ({ ...prev, [foundShelf!]: true }));
-      }
-
-      // Smooth scroll to the specific item card
-      setTimeout(() => {
-        const element = document.getElementById(`item-card-${highlightedItemRowIndex}`);
-        if (element) {
-          element.scrollIntoView({ behavior: "smooth", block: "center" });
-        }
-      }, 350);
-    }
-  }, [highlightedItemRowIndex, shelvesWithItems]);
-
-  if (!rack) {
-    return (
-      <aside
-        style={{
-          width: 350,
-          background: PANEL,
-          borderLeft: `1px solid ${PANEL_BORDER}`,
-          padding: 24,
-          flexShrink: 0,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          textAlign: "center",
-          gap: 12,
-        }}
-      >
-        <Package size={48} style={{ opacity: 0.2, color: TEXT_MAIN }} />
-        <div style={{ fontSize: 13, color: TEXT_DIM, lineHeight: 1.6 }}>
-          배치 지도에서 랙을 클릭하면
-          <br />
-          <b>상세 선반 단수 및 실시간 재고 정보</b>가
-          <br />
-          여기에 표시됩니다.
-        </div>
-      </aside>
-    );
+  } catch (e) {
+    // ignore
   }
+  return clean;
+}
 
-  const totalStock = shelvesWithItems.reduce(
-    (sum, s) => sum + s.items.reduce((isum, it) => isum + (typeof it.stock === "number" ? it.stock : 0), 0),
-    0
-  );
-  const totalItems = shelvesWithItems.reduce((sum, s) => sum + s.items.length, 0);
+export default function RentLogsPage({
+  rentLogs,
+  inventory,
+  onAddRentLog,
+  onClose,
+  isLightMode,
+  isAdmin,
+  showToast,
+  isGuestMode = false,
+}: RentLogsPageProps) {
+  // Search and Filter states
+  const [filterQuery, setFilterQuery] = useState("");
+  const [filterType, setFilterType] = useState("전체");
 
-  const toggleShelf = (shelf: string) => {
-    setExpandedShelves((prev) => ({ ...prev, [shelf]: !prev[shelf] }));
+  // Collapsible Registration Form State (Guesst Mode defaults to true)
+  const [showAddForm, setShowAddForm] = useState(isGuestMode);
+  
+  // Registration Form Fields
+  const [rentUser, setRentUser] = useState("");
+  const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [rentQty, setRentQty] = useState(1);
+  const [actionType, setActionType] = useState<"대여" | "반납">("대여");
+  const [noteInput, setNoteInput] = useState("");
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  // Instant Return Trackers (prevents double clicking and gives visual checkmark)
+  const [returnedTimestamps, setReturnedTimestamps] = useState<string[]>([]);
+  const [returningStates, setReturningStates] = useState<{ [key: string]: boolean }>({});
+
+  // Dynamically compute returned timestamps from the logs history (handles refresh/initial load)
+  const computedReturnedTimestamps = useMemo(() => {
+    const returnedSet = new Set<string>();
+
+    // Sort all rentLogs chronologically (oldest first)
+    const chronoLogs = [...rentLogs].sort((a, b) => {
+      const timeA = a.timestamp || "";
+      const timeB = b.timestamp || "";
+      return timeA.localeCompare(timeB);
+    });
+
+    const outstanding: { [key: string]: Array<{ timestamp: string; qty: number; remainingQty: number }> } = {};
+
+    for (const log of chronoLogs) {
+      if (!log.name || !log.user) continue;
+      const key = `${log.name.trim()}||${log.user.trim()}`;
+      const logQty = Number(log.qty) || 0;
+
+      if (log.type === "대여") {
+        if (!outstanding[key]) {
+          outstanding[key] = [];
+        }
+        outstanding[key].push({
+          timestamp: log.timestamp,
+          qty: logQty,
+          remainingQty: logQty,
+        });
+      } else if (log.type === "반납") {
+        let matchedByNote = false;
+
+        if (log.note && log.note.includes("[즉시반납]")) {
+          const list = outstanding[key] || [];
+          for (const item of list) {
+            if (item.remainingQty > 0) {
+              const formatted = formatTimestampToMinutes(item.timestamp);
+              if (log.note.includes(formatted)) {
+                item.remainingQty = 0;
+                returnedSet.add(item.timestamp);
+                matchedByNote = true;
+                break;
+              }
+            }
+          }
+        }
+
+        if (!matchedByNote) {
+          let returnQtyRemaining = logQty;
+          const list = outstanding[key] || [];
+          for (const item of list) {
+            if (item.remainingQty > 0) {
+              const deduct = Math.min(item.remainingQty, returnQtyRemaining);
+              item.remainingQty -= deduct;
+              returnQtyRemaining -= deduct;
+              if (item.remainingQty === 0) {
+                returnedSet.add(item.timestamp);
+              }
+              if (returnQtyRemaining <= 0) {
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return Array.from(returnedSet);
+  }, [rentLogs]);
+
+  const allReturnedTimestamps = useMemo(() => {
+    const combined = new Set([...computedReturnedTimestamps, ...returnedTimestamps]);
+    return Array.from(combined);
+  }, [computedReturnedTimestamps, returnedTimestamps]);
+
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close item dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Filter inventory for dropdown autocomplete
+  const filteredInventoryItems = useMemo(() => {
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return inventory;
+    return inventory.filter(
+      (item) =>
+        item.name.toLowerCase().includes(q) ||
+        item.location.toLowerCase().includes(q)
+    );
+  }, [inventory, searchQuery]);
+
+  // Handle local form submission
+  const handleFormSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!rentUser.trim()) {
+      showToast?.("신청자 성함을 입력해 주세요.", "warn");
+      return;
+    }
+
+    let activeItem = selectedItem;
+    let isTempItem = false;
+
+    if (!activeItem && searchQuery.trim()) {
+      // 드롭다운에 없는 것을 직접 입력한 경우, 임시 품목으로 자동 처리
+      activeItem = {
+        rowIndex: -1,
+        location: "기타",
+        photo: "",
+        name: searchQuery.trim(),
+        link: "N/A",
+        stock: "N/A",
+        updatedAt: "",
+        manager: "",
+        note: "리스트 외 임시 품목",
+        spec: "",
+      };
+      isTempItem = true;
+    }
+
+    if (!activeItem) {
+      showToast?.("대여 또는 반납할 품목을 선택하거나 검색창에 직접 입력해 주세요.", "warn");
+      return;
+    }
+
+    if (rentQty <= 0) {
+      showToast?.("수량은 1개 이상이어야 합니다.", "warn");
+      return;
+    }
+
+    // N/A가 아닐 때만 재고 제약 적용 (Bypass if null/N/A)
+    if (actionType === "대여" && typeof activeItem.stock === "number" && activeItem.stock !== null) {
+      if (activeItem.stock <= 0) {
+        showToast?.("선택한 품목의 현재고가 부족하여 대여할 수 없습니다.", "error");
+        return;
+      }
+      if (rentQty > activeItem.stock) {
+        showToast?.(`현재고(${activeItem.stock}개)를 초과하여 대여할 수 없습니다.`, "warn");
+        return;
+      }
+    }
+
+    setSubmitting(true);
+    try {
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const customTsStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+
+      const log: RentLog = {
+        timestamp: customTsStr,
+        location: activeItem.location,
+        name: activeItem.name,
+        type: actionType,
+        qty: rentQty,
+        user: rentUser.trim(),
+        note: noteInput.trim() || `${actionType} 등록${isTempItem ? " (리스트 외 임시 품목)" : ""}`,
+      };
+
+      await onAddRentLog(log);
+      
+      showToast?.(`${activeItem.name} ${rentQty}개 ${actionType} 등록이 완료되었습니다.`, "ok");
+      
+      // Reset form (except manager name for successive logging convenience)
+      setSelectedItem(null);
+      setRentQty(1);
+      setNoteInput("");
+      setSearchQuery("");
+      setShowAddForm(false);
+    } catch (err: any) {
+      showToast?.("등록 실패: " + err.message, "error");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
+  // Instant Return execution
+  const handleInstantReturn = async (log: RentLog) => {
+    if (returningStates[log.timestamp] || allReturnedTimestamps.includes(log.timestamp)) return;
+
+    setReturningStates((prev) => ({ ...prev, [log.timestamp]: true }));
+    showToast?.(`${log.name} 즉시 반납 진행 중...`, "info");
+
+    try {
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const customTsStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+
+      const returnLog: RentLog = {
+        timestamp: customTsStr,
+        location: log.location,
+        name: log.name,
+        type: "반납",
+        qty: log.qty,
+        user: log.user,
+        note: `[즉시반납] ${formatTimestampToMinutes(log.timestamp)} 대여 건 반납 완료`,
+      };
+
+      await onAddRentLog(returnLog);
+      setReturnedTimestamps((prev) => [...prev, log.timestamp]);
+      showToast?.(`${log.name} 반납 처리가 즉시 완료되었습니다!`, "ok");
+    } catch (err: any) {
+      showToast?.("반납 실패: " + err.message, "error");
+    } finally {
+      setReturningStates((prev) => ({ ...prev, [log.timestamp]: false }));
+    }
+  };
+
+  // Filter logs for table rendering
+  const filteredLogs = useMemo(() => {
+    const filtered = rentLogs.filter((log) => {
+      const matchesQuery =
+        !filterQuery ||
+        log.name.toLowerCase().includes(filterQuery.toLowerCase()) ||
+        log.user.toLowerCase().includes(filterQuery.toLowerCase()) ||
+        (log.location && log.location.toLowerCase().includes(filterQuery.toLowerCase())) ||
+        (log.note && log.note.toLowerCase().includes(filterQuery.toLowerCase()));
+
+      const matchesType = filterType === "전체" || log.type === filterType;
+
+      return matchesQuery && matchesType;
+    });
+
+    // Sort by timestamp descending (newest first)
+    return [...filtered].sort((a, b) => {
+      const timeA = a.timestamp || "";
+      const timeB = b.timestamp || "";
+      return timeB.localeCompare(timeA);
+    });
+  }, [rentLogs, filterQuery, filterType]);
+
   return (
-    <aside
+    <div
       style={{
-        width: 350,
-        background: PANEL,
-        borderLeft: `1px solid ${PANEL_BORDER}`,
-        flexShrink: 0,
+        flex: 1,
         display: "flex",
         flexDirection: "column",
+        background: "var(--canvas-bg, #020617)",
+        height: "100%",
         overflow: "hidden",
       }}
     >
-      {/* Rack Panel Header */}
+      {/* Header */}
       <div
         style={{
-          padding: "16px 18px",
+          padding: "16px 24px",
           borderBottom: `1px solid ${PANEL_BORDER}`,
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "flex-start",
-        }}
-      >
-        <div style={{ flex: 1 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-            <span
-              style={{
-                width: 10,
-                height: 10,
-                borderRadius: 2,
-                background: rack.color,
-                display: "inline-block",
-              }}
-            />
-            <span className="mono" style={{ fontSize: 11, color: TEXT_DIM }}>
-              {rack.id} 랙 구역
-            </span>
-          </div>
-          {isAdmin ? (
-            <input
-              className="mono"
-              value={nameInput}
-              onChange={(e) => setNameInput(e.target.value)}
-              onBlur={() => {
-                if (nameInput.trim() && nameInput !== rack.name) {
-                  onUpdateRack({ name: nameInput.trim() });
-                }
-              }}
-              style={{
-                width: "100%",
-                fontSize: 16,
-                fontWeight: 700,
-                padding: "5px 8px",
-                background: "var(--input-bg, #0f172a)",
-                border: `1px solid ${PANEL_BORDER}`,
-                borderRadius: 6,
-                color: TEXT_MAIN,
-              }}
-            />
-          ) : (
-            <div style={{ fontSize: 16, fontWeight: 700, color: TEXT_MAIN, padding: "5px 0" }}>
-              {rack.name || `${rack.id} 랙`}
-            </div>
-          )}
-        </div>
-        <button
-          onClick={onClose}
-          style={{
-            background: "transparent",
-            border: "none",
-            color: TEXT_DIM,
-            fontSize: 18,
-            cursor: "pointer",
-            padding: "0 4px",
-          }}
-        >
-          ✕
-        </button>
-      </div>
-
-      {/* Theme Color Settings Section Header */}
-      {isAdmin && (
-        <>
-          <div
-            onClick={() => setIsSettingsExpanded(!isSettingsExpanded)}
-            style={{
-              padding: "10px 18px",
-              borderBottom: `1px solid ${PANEL_BORDER}`,
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              cursor: "pointer",
-              background: "var(--input-bg, #0f172a)",
-              userSelect: "none"
-            }}
-          >
-            <span style={{ fontSize: "11px", fontWeight: 600, color: TEXT_DIM }}>
-              🎨 보관랙 테마 컬러 설정
-            </span>
-            <span style={{ fontSize: "11px", color: TEXT_DIM }}>{isSettingsExpanded ? "접기 ▲" : "펼치기 ▼"}</span>
-          </div>
-
-          {/* Theme Color Settings */}
-          {isSettingsExpanded && (
-            <div
-              style={{
-                padding: "14px 18px",
-                borderBottom: `1px solid ${PANEL_BORDER}`,
-                display: "flex",
-                flexDirection: "column",
-                gap: 10,
-              }}
-            >
-              <div style={{ fontSize: 11, color: TEXT_DIM, marginBottom: 2 }}>
-                보관 구역의 강조 테마 색상을 선택하세요.
-              </div>
-
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                {PALETTE.map((c) => (
-                  <button
-                    key={c}
-                    onClick={() => onUpdateRack({ color: c })}
-                    style={{
-                      width: 22,
-                      height: 22,
-                      borderRadius: 5,
-                      background: c,
-                      border: rack.color === c ? `2px solid ${TEXT_MAIN}` : "2px solid transparent",
-                      padding: 0,
-                      cursor: "pointer",
-                    }}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-        </>
-      )}
-
-      {/* Stock Items List by Shelf */}
-      <div
-        style={{
-          padding: "14px 18px 8px",
+          background: "var(--panel-bg, #0f172a)",
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
+          flexWrap: "wrap",
+          gap: "12px",
         }}
       >
-        <div style={{ fontSize: "12.5px", fontWeight: 600 }}>
-          선반별 품목 정보 <span style={{ color: TEXT_DIM }}>({totalItems}개 품목)</span>
-        </div>
-        {isAdmin && (
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <button
-            onClick={onAddItem}
+            onClick={onClose}
             style={{
               background: "transparent",
-              border: `1px solid ${ACCENT}`,
-              color: ACCENT,
-              fontSize: "11.5px",
-              padding: "4px 9px",
-              borderRadius: 5,
+              border: "none",
+              color: TEXT_DIM,
               cursor: "pointer",
               display: "flex",
               alignItems: "center",
               gap: 4,
+              fontSize: 13,
             }}
           >
-            <Plus size={13} />
-            품목 등록
+            <ArrowLeft size={16} />
+            {isGuestMode ? "로그인 화면으로" : "돌아가기"}
           </button>
-        )}
+          <div style={{ width: 1, height: 16, background: PANEL_BORDER }} />
+          <h1 style={{ fontSize: 16, fontWeight: 800, color: TEXT_MAIN, display: "flex", alignItems: "center", gap: 6 }}>
+            <ArrowRightLeft size={18} style={{ color: ACCENT }} />
+            {isGuestMode ? "📦 외부인 대여 및 반납 간편 신청대장" : "📦 물품 대여 및 반납 대장 관리"}
+          </h1>
+        </div>
+
+        <button
+          onClick={() => setShowAddForm((prev) => !prev)}
+          style={{
+            background: showAddForm ? "rgba(239, 68, 68, 0.15)" : `rgba(99, 102, 241, 0.15)`,
+            color: showAddForm ? DANGER : ACCENT,
+            border: `1px solid ${showAddForm ? "rgba(239, 68, 68, 0.3)" : "rgba(99, 102, 241, 0.3)"}`,
+            borderRadius: "8px",
+            padding: "6px 14px",
+            fontSize: "12px",
+            fontWeight: 700,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            gap: "5px",
+            transition: "all 0.15s",
+          }}
+        >
+          {showAddForm ? (
+            <>
+              <X size={14} />
+              {isGuestMode ? "신청 입력란 접기" : "신청 폼 닫기"}
+            </>
+          ) : (
+            <>
+              <Plus size={14} />
+              {isGuestMode ? "대여/반납 신청란 열기" : "신규 대여/반납 등록"}
+            </>
+          )}
+        </button>
       </div>
 
-      {/* Scrollable shelves */}
-      <div style={{ flex: 1, overflowY: "auto", padding: "0 18px 18px" }}>
-        {shelvesWithItems.length === 0 ? (
-          <div style={{ fontSize: "12.5px", color: TEXT_DIM, padding: "20px 0", textAlign: "center" }}>
-            이 랙에 등록된 선반/품목 데이터가 존재하지 않습니다. 우측 상단의 '품목 등록'을 눌러 새로 생성해보세요.
-          </div>
-        ) : (
-          shelvesWithItems.map(({ shelf, items }) => {
-            const shelfStock = items.reduce((s, it) => s + (typeof it.stock === "number" ? it.stock : 0), 0);
-            const isHighlighted = highlightShelf === shelf;
-            const isExpanded = !!expandedShelves[shelf];
+      <div style={{ flex: 1, display: "flex", overflow: "hidden", flexDirection: "column" }}>
+        
+        {/* Collapsible Add Form */}
+        {showAddForm && (
+          <div
+            style={{
+              padding: "20px 24px",
+              background: "var(--panel-bg, #0f172a)",
+              borderBottom: `2px solid ${PANEL_BORDER}`,
+              boxShadow: "inset 0 -10px 20px -10px rgba(0,0,0,0.3)",
+              animation: "slideDown 0.2s ease-out",
+            }}
+          >
+            <form onSubmit={handleFormSubmit} style={{ maxWidth: "1100px", margin: "0 auto" }}>
+              <h3 style={{ fontSize: "14px", fontWeight: 700, color: TEXT_MAIN, marginBottom: "14px", display: "flex", alignItems: "center", gap: "6px" }}>
+                <Plus size={16} style={{ color: ACCENT }} />
+                {isGuestMode ? "외부인 대여 / 반납 직접 등록 및 신청" : "간편 신규 대여 / 반납 직접 등록"}
+              </h3>
 
-            return (
-              <div id={`shelf-container-${shelf}`} key={shelf} style={{ marginBottom: 12, position: "relative" }}>
-                {/* Shelf Title Button */}
-                <button
-                  onClick={() => toggleShelf(shelf)}
-                  style={{
-                    position: "sticky",
-                    top: 0,
-                    zIndex: 10,
-                    width: "100%",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    background: isHighlighted 
-                      ? "rgba(245, 158, 11, 0.95)" 
-                      : (isLightMode ? "rgba(241, 245, 249, 0.95)" : "rgba(30, 41, 59, 0.95)"),
-                    backdropFilter: "blur(4px)",
-                    border: `2px solid ${isHighlighted ? "#f59e0b" : hexToRgba(rack.color, 0.4)}`,
-                    boxShadow: isHighlighted ? "0 4px 12px rgba(245, 158, 11, 0.4)" : "0 2px 6px rgba(0, 0, 0, 0.08)",
-                    borderRadius: 6,
-                    padding: "8px 10px",
-                    marginBottom: 6,
-                    transition: "all 0.3s ease-in-out",
-                    cursor: "pointer",
-                  }}
-                >
-                  <span className="mono" style={{ fontSize: "12.5px", fontWeight: 700, color: isHighlighted ? "#ffffff" : (isLightMode ? "#0f172a" : TEXT_MAIN) }}>
-                    {isHighlighted ? `🔍 ${shelf} (검색됨)` : shelf}
-                  </span>
-                  <span style={{ fontSize: "11px", color: isHighlighted ? "#ffffff" : TEXT_DIM, display: "flex", alignItems: "center", gap: 4 }}>
-                    {items.length}개 품목 {isExpanded ? "▲" : "▼"}
-                  </span>
-                </button>
-
-                {/* Shelf Items List */}
-                {isExpanded && (
-                  <div style={{ paddingLeft: 4, display: "flex", flexDirection: "column", gap: 8 }}>
-                    {items.map((item) => {
-                      const hasImage = !!item.photo;
-                      const imageUrl = hasImage ? getGoogleDriveImageUrl(item.photo) : "";
-                      const isItemHighlighted = highlightedItemRowIndex === item.rowIndex;
-
-                      return (
-                        <div
-                          id={`item-card-${item.rowIndex}`}
-                          key={item.rowIndex}
-                          style={{
-                            background: isItemHighlighted ? "rgba(245, 158, 11, 0.12)" : "var(--input-bg, #0f172a)",
-                            border: isItemHighlighted ? "2px solid #f59e0b" : `1px solid ${PANEL_BORDER}`,
-                            boxShadow: isItemHighlighted ? "0 0 14px rgba(245, 158, 11, 0.45)" : "none",
-                            borderRadius: 8,
-                            padding: "10px 12px",
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: 8,
-                            transition: "all 0.3s ease-in-out",
-                          }}
-                        >
-                          {/* Photo and basic info row */}
-                          <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-                            {/* Image Visualizer */}
-                            <div
-                              onClick={() => {
-                                if (hasImage) {
-                                  setZoomImageUrl(imageUrl);
-                                  setZoomImageName(item.name || "(이름 없음)");
-                                }
-                              }}
-                              title={hasImage ? "클릭하여 사진 확대" : undefined}
-                              style={{
-                                width: 56,
-                                height: 56,
-                                background: "var(--app-bg, #1b1c21)",
-                                border: `1px solid ${PANEL_BORDER}`,
-                                borderRadius: 6,
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                overflow: "hidden",
-                                flexShrink: 0,
-                                position: "relative",
-                                cursor: hasImage ? "pointer" : "default",
-                              }}
-                            >
-                              {hasImage ? (
-                                <img
-                                  src={imageUrl}
-                                  alt={item.name}
-                                  referrerPolicy="no-referrer"
-                                  style={{
-                                    width: "100%",
-                                    height: "100%",
-                                    objectFit: "cover",
-                                  }}
-                                  onError={(e) => {
-                                    // Fallback to placeholder if image load fails (e.g. invalid url/permissions)
-                                    (e.target as HTMLElement).style.display = "none";
-                                    const sibling = (e.target as HTMLElement).nextElementSibling;
-                                    if (sibling) (sibling as HTMLElement).style.display = "flex";
-                                  }}
-                                />
-                              ) : null}
-                              <div
-                                style={{
-                                  display: hasImage ? "none" : "flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  width: "100%",
-                                  height: "100%",
-                                }}
-                              >
-                                <Image size={18} style={{ color: TEXT_DIM }} />
-                              </div>
-                            </div>
-
-                            {/* Item name, note (Column H), and links */}
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div
-                                style={{
-                                  fontSize: "13px",
-                                  fontWeight: 600,
-                                  color: TEXT_MAIN,
-                                  whiteSpace: "nowrap",
-                                  overflow: "hidden",
-                                  textOverflow: "ellipsis",
-                                }}
-                                title={item.name}
-                              >
-                                {item.name || "(이름 없음)"}
-                              </div>
-
-                              {/* Column H note display */}
-                              <div style={{ display: "block", marginTop: 4 }}>
-                                {item.note ? (
-                                  <div
-                                    style={{
-                                      fontSize: "11.5px",
-                                      fontWeight: 500,
-                                      color: TEXT_MAIN,
-                                      background: "rgba(245, 158, 11, 0.08)",
-                                      border: "1px solid rgba(245, 158, 11, 0.2)",
-                                      padding: "3px 8px",
-                                      borderRadius: 5,
-                                      display: "inline-block",
-                                      maxWidth: "100%",
-                                      wordBreak: "break-all",
-                                    }}
-                                    title={`특이사항: ${item.note}`}
-                                  >
-                                    📝 {item.note}
-                                  </div>
-                                ) : (
-                                  <div style={{ fontSize: "10.5px", color: TEXT_DIM, fontStyle: "italic" }}>
-                                    특이사항 없음
-                                  </div>
-                                )}
-                              </div>
-
-                              {item.link && item.link !== "N/A" ? (
-                                <div style={{ display: "block", marginTop: 6 }}>
-                                  <a
-                                    href={item.link}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    style={{
-                                      fontSize: "10.5px",
-                                      color: ACCENT,
-                                      display: "inline-flex",
-                                      alignItems: "center",
-                                      gap: 3,
-                                      textDecoration: "none",
-                                    }}
-                                  >
-                                    구매 링크
-                                    <ExternalLink size={10} />
-                                  </a>
-                                </div>
-                              ) : null}
-                            </div>
-                          </div>
-
-                          {/* Footer action row: +/- adjustments or 대여/반납 buttons */}
-                          <div
-                            style={{
-                              display: "flex",
-                              flexDirection: "column",
-                              gap: 6,
-                              borderTop: `1px solid ${PANEL_BORDER}`,
-                              paddingTop: 8,
-                              marginTop: 2,
-                            }}
-                          >
-                            {isAdmin ? (
-                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                                {/* Stock modifier buttons */}
-                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                  <button
-                                    onClick={() => onChangeStock(item, -1)}
-                                    disabled={typeof item.stock !== "number" || item.stock <= 0}
-                                    style={{
-                                      ...stepBtnStyle,
-                                      opacity: typeof item.stock !== "number" || item.stock <= 0 ? 0.35 : 1,
-                                      cursor: typeof item.stock !== "number" || item.stock <= 0 ? "not-allowed" : "pointer",
-                                    }}
-                                  >
-                                    −
-                                  </button>
-                                  <span
-                                    className="mono"
-                                    style={{
-                                      fontSize: "12.5px",
-                                      fontWeight: 700,
-                                      minWidth: 26,
-                                      textAlign: "center",
-                                      color: item.stock === 0 ? DANGER : item.stock === null ? TEXT_DIM : OK,
-                                    }}
-                                  >
-                                    {item.stock === null ? "N/A" : item.stock}
-                                  </span>
-                                  <button
-                                    onClick={() => onChangeStock(item, 1)}
-                                    disabled={typeof item.stock !== "number"}
-                                    style={{
-                                      ...stepBtnStyle,
-                                      opacity: typeof item.stock !== "number" ? 0.35 : 1,
-                                      cursor: typeof item.stock !== "number" ? "not-allowed" : "pointer",
-                                    }}
-                                  >
-                                    +
-                                  </button>
-                                </div>
-
-                                {/* Manager/Date and buttons */}
-                                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-                                    <span style={{ fontSize: "10px", color: TEXT_DIM }}>
-                                      {item.manager || "담당자 없음"}
-                                    </span>
-                                    <span style={{ fontSize: "9px", color: TEXT_DIM, marginTop: 1 }}>
-                                      {item.updatedAt ? item.updatedAt.split(" ")[0] : ""}
-                                    </span>
-                                  </div>
-                                  <div style={{ display: "flex", gap: 6 }}>
-                                    <button
-                                      onClick={() => onEditItem(item)}
-                                      title="수정"
-                                      style={{
-                                        background: "transparent",
-                                        border: "none",
-                                        color: TEXT_DIM,
-                                        cursor: "pointer",
-                                        padding: 2,
-                                      }}
-                                    >
-                                      <Edit3 size={12} />
-                                    </button>
-                                    <button
-                                      onClick={() => onDeleteItem(item.rowIndex)}
-                                      title="삭제"
-                                      style={{
-                                        background: "transparent",
-                                        border: "none",
-                                        color: DANGER,
-                                        cursor: "pointer",
-                                        padding: 2,
-                                      }}
-                                    >
-                                      <Trash2 size={12} />
-                                    </button>
-                                  </div>
-                                </div>
-                              </div>
-                            ) : (
-                              <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
-                                {/* Stock count display */}
-                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                                  <div style={{ fontSize: "11.5px", color: TEXT_DIM }}>
-                                    현재고: <span className="mono" style={{ fontSize: "13px", fontWeight: 700, color: item.stock === 0 ? DANGER : OK }}>
-                                      {item.stock === null ? "N/A" : `${item.stock} 개`}
-                                    </span>
-                                  </div>
-                                  <span style={{ fontSize: "10px", color: TEXT_DIM }}>
-                                    최종수정: {item.updatedAt ? item.updatedAt.split(" ")[0] : "없음"}
-                                  </span>
-                                </div>
-                                {/* Borrow and Return buttons */}
-                                <div style={{ display: "flex", gap: 6, width: "100%" }}>
-                                  <button
-                                    onClick={() => onRentItem?.(item, "대여")}
-                                    disabled={item.stock === null || item.stock <= 0}
-                                    style={{
-                                      flex: 1,
-                                      background: "rgba(99, 102, 241, 0.12)",
-                                      border: `1px solid ${ACCENT}`,
-                                      color: ACCENT,
-                                      borderRadius: "6px",
-                                      padding: "6px 8px",
-                                      fontSize: "11.5px",
-                                      fontWeight: 700,
-                                      cursor: (item.stock === null || item.stock <= 0) ? "not-allowed" : "pointer",
-                                      opacity: (item.stock === null || item.stock <= 0) ? 0.4 : 1,
-                                      display: "flex",
-                                      alignItems: "center",
-                                      justifyContent: "center",
-                                      gap: 4,
-                                    }}
-                                  >
-                                    📦 대여하기
-                                  </button>
-                                  <button
-                                    onClick={() => onRentItem?.(item, "반납")}
-                                    style={{
-                                      flex: 1,
-                                      background: "rgba(16, 185, 129, 0.12)",
-                                      border: `1px solid ${OK}`,
-                                      color: OK,
-                                      borderRadius: "6px",
-                                      padding: "6px 8px",
-                                      fontSize: "11.5px",
-                                      fontWeight: 700,
-                                      cursor: "pointer",
-                                      display: "flex",
-                                      alignItems: "center",
-                                      justifyContent: "center",
-                                      gap: 4,
-                                    }}
-                                  >
-                                    🔄 반납하기
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })
-        )}
-      </div>
-
-      {/* Rack Delete Action at Bottom */}
-      {isAdmin && (
-        <div style={{ padding: 18, borderTop: `1px solid ${PANEL_BORDER}` }}>
-          {confirmDelete ? (
-            <div style={{ display: "flex", gap: 8 }}>
-              <button
-                onClick={onDeleteRack}
+              <div
                 style={{
-                  ...actionBtnStyle,
-                  flex: 1,
-                  background: DANGER,
-                  borderColor: DANGER,
-                  color: "#15161A",
-                  cursor: "pointer",
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+                  gap: "16px",
+                  alignItems: "end",
                 }}
               >
-                삭제 확인
-              </button>
-              <button
-                onClick={() => setConfirmDelete(false)}
-                style={{ ...actionBtnStyle, flex: 1, cursor: "pointer" }}
-              >
-                취소
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={() => setConfirmDelete(true)}
-              style={{
-                ...actionBtnStyle,
-                width: "100%",
-                color: DANGER,
-                borderColor: hexToRgba(DANGER, 0.4),
-                background: "transparent",
-                cursor: "pointer",
-              }}
-            >
-              이 랙 삭제
-            </button>
-          )}
-        </div>
-      )}
+                {/* 1. 구분 (대여 / 반납) */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <label style={{ fontSize: "11px", fontWeight: 700, color: TEXT_DIM }}>구분</label>
+                  <div style={{ display: "flex", background: "var(--input-bg, #020617)", borderRadius: "8px", padding: "3px", border: `1px solid ${PANEL_BORDER}` }}>
+                    <button
+                      type="button"
+                      onClick={() => setActionType("대여")}
+                      style={{
+                        flex: 1,
+                        padding: "6px 0",
+                        borderRadius: "6px",
+                        border: "none",
+                        fontSize: "12px",
+                        fontWeight: 700,
+                        cursor: "pointer",
+                        background: actionType === "대여" ? ACCENT : "transparent",
+                        color: actionType === "대여" ? "#ffffff" : TEXT_DIM,
+                        transition: "all 0.15s",
+                      }}
+                    >
+                      대여
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActionType("반납")}
+                      style={{
+                        flex: 1,
+                        padding: "6px 0",
+                        borderRadius: "6px",
+                        border: "none",
+                        fontSize: "12px",
+                        fontWeight: 700,
+                        cursor: "pointer",
+                        background: actionType === "반납" ? OK : "transparent",
+                        color: actionType === "반납" ? "#ffffff" : TEXT_DIM,
+                        transition: "all 0.15s",
+                      }}
+                    >
+                      반납
+                    </button>
+                  </div>
+                </div>
 
-      {/* 이미지 확대 모달 */}
-      {zoomImageUrl && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(10, 10, 11, 0.85)",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 9999,
-            padding: 24,
-            backdropFilter: "blur(4px)",
-          }}
-          onClick={() => setZoomImageUrl(null)}
-        >
+                {/* 2. 신청자 성함 */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <label style={{ fontSize: "11px", fontWeight: 700, color: TEXT_DIM }}>신청자 성함</label>
+                  <div style={{ position: "relative" }}>
+                    <User size={14} style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", color: TEXT_DIM }} />
+                    <input
+                      type="text"
+                      placeholder="신청자명 입력"
+                      value={rentUser}
+                      onChange={(e) => setRentUser(e.target.value)}
+                      required
+                      style={{
+                        width: "100%",
+                        padding: "7px 10px 7px 30px",
+                        borderRadius: "8px",
+                        background: "var(--input-bg, #020617)",
+                        border: `1px solid ${PANEL_BORDER}`,
+                        color: TEXT_MAIN,
+                        fontSize: "12px",
+                        outline: "none",
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* 3. 품목 검색 및 선택 */}
+                <div ref={dropdownRef} style={{ display: "flex", flexDirection: "column", gap: "6px", position: "relative" }}>
+                  <label style={{ fontSize: "11px", fontWeight: 700, color: TEXT_DIM }}>품목 검색 및 선택</label>
+                  <div
+                    onClick={() => setIsDropdownOpen(true)}
+                    style={{ position: "relative" }}
+                  >
+                    <Search size={14} style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", color: TEXT_DIM }} />
+                    <input
+                      type="text"
+                      placeholder={selectedItem ? `${selectedItem.name} (${selectedItem.location})` : "자재명/보관소 검색..."}
+                      value={searchQuery}
+                      onChange={(e) => {
+                        setSearchQuery(e.target.value);
+                        if (selectedItem) setSelectedItem(null); // 수정하기 시작하면 리셋
+                        setIsDropdownOpen(true);
+                      }}
+                      style={{
+                        width: "100%",
+                        padding: "7px 24px 7px 30px",
+                        borderRadius: "8px",
+                        background: "var(--input-bg, #020617)",
+                        border: selectedItem ? `1.5px solid ${OK}` : `1px solid ${PANEL_BORDER}`,
+                        color: selectedItem ? OK : TEXT_MAIN,
+                        fontSize: "12px",
+                        outline: "none",
+                        fontWeight: selectedItem ? 700 : "normal",
+                      }}
+                    />
+                    <ChevronDown size={14} style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", color: TEXT_DIM, cursor: "pointer" }} />
+                  </div>
+
+                  {/* Autocomplete Dropdown */}
+                  {isDropdownOpen && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: "100%",
+                        left: 0,
+                        right: 0,
+                        background: "var(--panel-bg, #0f172a)",
+                        border: `1px solid ${PANEL_BORDER}`,
+                        borderRadius: "8px",
+                        marginTop: "4px",
+                        maxHeight: "220px",
+                        overflowY: "auto",
+                        zIndex: 100,
+                        boxShadow: "0 10px 15px -3px rgba(0,0,0,0.5)",
+                      }}
+                    >
+                      {/* 검색어 입력 시, 목록에 없는 새로운 물건 직접 신청용 버튼 노출 */}
+                      {searchQuery.trim() !== "" && (
+                        <div
+                          onClick={() => {
+                            const tempItem: InventoryItem = {
+                              rowIndex: -1,
+                              location: "기타",
+                              photo: "",
+                              name: searchQuery.trim(),
+                              link: "N/A",
+                              stock: "N/A",
+                              updatedAt: "",
+                              manager: "",
+                              note: "리스트 외 임시 품목",
+                              spec: "",
+                            };
+                            setSelectedItem(tempItem);
+                            setSearchQuery("");
+                            setIsDropdownOpen(false);
+                          }}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "10px",
+                            padding: "10px 12px",
+                            borderBottom: `1px solid ${PANEL_BORDER}`,
+                            cursor: "pointer",
+                            background: "rgba(99, 102, 241, 0.12)",
+                            color: "#818cf8",
+                          }}
+                        >
+                          <span style={{ fontSize: "14px" }}>➕</span>
+                          <div style={{ textAlign: "left" }}>
+                            <div style={{ fontSize: "12px", fontWeight: 700 }}>
+                              "{searchQuery.trim()}" (새 임시 물품으로 직접 대여/반납 신청)
+                            </div>
+                            <div style={{ fontSize: "10px", color: TEXT_DIM }}>
+                              목록에 없으므로 임시 지정하여 대여/반납 목록에 추가합니다.
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {filteredInventoryItems.length === 0 ? (
+                        searchQuery.trim() === "" ? (
+                          <div style={{ padding: "10px", fontSize: "12px", color: TEXT_DIM, textAlign: "center" }}>
+                            검색된 자재가 없습니다.
+                          </div>
+                        ) : null
+                      ) : (
+                        filteredInventoryItems.map((item) => (
+                          <div
+                            key={item.rowIndex}
+                            onClick={() => {
+                              setSelectedItem(item);
+                              setSearchQuery("");
+                              setIsDropdownOpen(false);
+                            }}
+                            style={{
+                              padding: "8px 12px",
+                              fontSize: "12px",
+                              borderBottom: `1px solid ${PANEL_BORDER}`,
+                              cursor: "pointer",
+                              color: TEXT_MAIN,
+                              display: "flex",
+                              justifyContent: "space-between",
+                              background: selectedItem?.rowIndex === item.rowIndex ? "rgba(99, 102, 241, 0.1)" : "transparent",
+                            }}
+                          >
+                            <span style={{ fontWeight: 600 }}>{item.name}</span>
+                            <span style={{ color: TEXT_DIM, fontSize: "11px" }}>
+                              위치: {item.location} | 재고: {item.stock === null ? "N/A" : `${item.stock}개`}
+                            </span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* 4. 신청 수량 */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <label style={{ fontSize: "11px", fontWeight: 700, color: TEXT_DIM }}>
+                    수량 {selectedItem && selectedItem.stock !== null && `(최대 ${selectedItem.stock}개)`}
+                  </label>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <button
+                      type="button"
+                      onClick={() => setRentQty(prev => Math.max(1, prev - 1))}
+                      style={{
+                        width: "32px",
+                        height: "32px",
+                        borderRadius: "6px",
+                        border: `1px solid ${PANEL_BORDER}`,
+                        background: "var(--input-bg, #020617)",
+                        color: TEXT_MAIN,
+                        fontWeight: "bold",
+                        cursor: "pointer",
+                      }}
+                    >
+                      −
+                    </button>
+                    <input
+                      type="number"
+                      min="1"
+                      value={rentQty}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value, 10);
+                        setRentQty(isNaN(val) || val <= 0 ? 1 : val);
+                      }}
+                      style={{
+                        width: "55px",
+                        height: "32px",
+                        borderRadius: "6px",
+                        background: "var(--input-bg, #020617)",
+                        border: `1px solid ${PANEL_BORDER}`,
+                        color: TEXT_MAIN,
+                        textAlign: "center",
+                        fontSize: "12px",
+                        fontWeight: 700,
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setRentQty(prev => prev + 1)}
+                      style={{
+                        width: "32px",
+                        height: "32px",
+                        borderRadius: "6px",
+                        border: `1px solid ${PANEL_BORDER}`,
+                        background: "var(--input-bg, #020617)",
+                        color: TEXT_MAIN,
+                        fontWeight: "bold",
+                        cursor: "pointer",
+                      }}
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+
+                {/* 5. 사유 / 비고 */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <label style={{ fontSize: "11px", fontWeight: 700, color: TEXT_DIM }}>비고 (사유 등)</label>
+                  <input
+                    type="text"
+                    placeholder="대여/반납 목적 또는 사유 기입"
+                    value={noteInput}
+                    onChange={(e) => setNoteInput(e.target.value)}
+                    style={{
+                      width: "100%",
+                      padding: "7px 10px",
+                      borderRadius: "8px",
+                      background: "var(--input-bg, #020617)",
+                      border: `1px solid ${PANEL_BORDER}`,
+                      color: TEXT_MAIN,
+                      fontSize: "12px",
+                      outline: "none",
+                    }}
+                  />
+                </div>
+
+                {/* 6. 제출 버튼 */}
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  style={{
+                    height: "32px",
+                    background: actionType === "대여" ? ACCENT : OK,
+                    color: "#ffffff",
+                    border: "none",
+                    borderRadius: "8px",
+                    fontSize: "12px",
+                    fontWeight: 800,
+                    cursor: submitting ? "not-allowed" : "pointer",
+                    padding: "0 16px",
+                    boxShadow: "0 4px 10px rgba(0,0,0,0.15)",
+                    opacity: submitting ? 0.7 : 1,
+                  }}
+                >
+                  {submitting ? "등록 중..." : `${actionType} 등록 완료`}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {/* Right Side: Logs Search Table */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: "24px", overflow: "hidden" }}>
+          
+          {/* Filters Bar */}
           <div
             style={{
-              position: "relative",
-              maxWidth: "90vw",
-              maxHeight: "80vh",
               display: "flex",
+              justifyContent: "space-between",
               alignItems: "center",
-              justifyContent: "center",
-              borderRadius: 12,
-              overflow: "hidden",
-              boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.5)",
-              background: "#000",
+              marginBottom: 16,
+              gap: 12,
+              flexWrap: "wrap",
             }}
-            onClick={(e) => e.stopPropagation()}
           >
-            <img
-              src={zoomImageUrl}
-              alt={zoomImageName}
-              referrerPolicy="no-referrer"
-              style={{
-                maxWidth: "100%",
-                maxHeight: "80vh",
-                objectFit: "contain",
-              }}
-            />
-            {/* 닫기 버튼 */}
-            <button
-              onClick={() => setZoomImageUrl(null)}
-              style={{
-                position: "absolute",
-                top: 12,
-                right: 12,
-                background: "rgba(0, 0, 0, 0.6)",
-                border: "none",
-                color: "#ffffff",
-                width: 32,
-                height: 32,
-                borderRadius: "50%",
-                fontSize: 16,
-                fontWeight: "bold",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              ✕
-            </button>
+            {/* Search Input */}
+            <div style={{ position: "relative", flex: 1, minWidth: "200px" }}>
+              <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: TEXT_DIM }} />
+              <input
+                type="text"
+                placeholder="품목명, 신청자, 위치, 사유 검색..."
+                value={filterQuery}
+                onChange={(e) => setFilterQuery(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "7px 10px 7px 30px",
+                  borderRadius: 6,
+                  background: "var(--panel-bg, #0f172a)",
+                  border: `1px solid ${PANEL_BORDER}`,
+                  color: TEXT_MAIN,
+                  fontSize: 12,
+                }}
+              />
+            </div>
+
+            {/* Type buttons */}
+            <div style={{ display: "flex", gap: 6, background: "var(--panel-bg, #0f172a)", padding: 3, borderRadius: 6, border: `1px solid ${PANEL_BORDER}` }}>
+              {["전체", "대여", "반납"].map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setFilterType(t)}
+                  style={{
+                    padding: "4px 10px",
+                    borderRadius: 4,
+                    fontSize: 11,
+                    fontWeight: 700,
+                    border: "none",
+                    cursor: "pointer",
+                    background: filterType === t ? (t === "대여" ? "rgba(99,102,241,0.2)" : t === "반납" ? "rgba(16,185,129,0.2)" : "rgba(255,255,255,0.1)") : "transparent",
+                    color: filterType === t ? (t === "대여" ? ACCENT : t === "반납" ? OK : TEXT_MAIN) : TEXT_DIM,
+                  }}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
           </div>
+
+          {/* Table Container */}
           <div
             style={{
-              marginTop: 12,
-              color: "#ffffff",
-              fontSize: 14,
-              fontWeight: 600,
-              background: "rgba(0, 0, 0, 0.6)",
-              padding: "6px 16px",
-              borderRadius: 20,
-              textAlign: "center",
+              flex: 1,
+              background: "var(--panel-bg, #0f172a)",
+              border: `1px solid ${PANEL_BORDER}`,
+              borderRadius: 8,
+              overflow: "hidden",
+              display: "flex",
+              flexDirection: "column",
             }}
           >
-            {zoomImageName}
+            <div style={{ flex: 1, overflowY: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead style={{ position: "sticky", top: 0, background: "var(--input-bg, #020617)", zIndex: 1, borderBottom: `1px solid ${PANEL_BORDER}` }}>
+                  <tr>
+                    <th style={{ textAlign: "left", padding: "10px 14px", color: TEXT_DIM, fontWeight: 600 }}>기록 시각</th>
+                    <th style={{ textAlign: "left", padding: "10px 14px", color: TEXT_DIM, fontWeight: 600 }}>구분</th>
+                    <th style={{ textAlign: "left", padding: "10px 14px", color: TEXT_DIM, fontWeight: 600 }}>품목명</th>
+                    <th style={{ textAlign: "left", padding: "10px 14px", color: TEXT_DIM, fontWeight: 600 }}>위치</th>
+                    <th style={{ textAlign: "center", padding: "10px 14px", color: TEXT_DIM, fontWeight: 600 }}>수량</th>
+                    <th style={{ textAlign: "left", padding: "10px 14px", color: TEXT_DIM, fontWeight: 600 }}>신청자</th>
+                    <th style={{ textAlign: "left", padding: "10px 14px", color: TEXT_DIM, fontWeight: 600 }}>사유 / 비고</th>
+                    <th style={{ textAlign: "center", padding: "10px 14px", color: TEXT_DIM, fontWeight: 600, width: "110px" }}>즉시 반납</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredLogs.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} style={{ textAlign: "center", padding: "40px", color: TEXT_DIM }}>
+                        <FileText size={24} style={{ margin: "0 auto 8px", opacity: 0.3, display: "block" }} />
+                        조회된 대여/반납 로그 기록이 없습니다.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredLogs.map((log, index) => {
+                      const isReturned = allReturnedTimestamps.includes(log.timestamp);
+                      const isReturning = returningStates[log.timestamp] || false;
+
+                      return (
+                        <tr
+                          key={index}
+                          style={{
+                            borderBottom: `1px solid ${PANEL_BORDER}`,
+                            background: index % 2 === 1 ? "rgba(255,255,255,0.01)" : "transparent",
+                          }}
+                        >
+                          <td style={{ padding: "11px 14px", color: TEXT_DIM, whiteSpace: "nowrap" }}>
+                            {formatTimestampToMinutes(log.timestamp)}
+                          </td>
+                          <td style={{ padding: "11px 14px" }}>
+                            <span
+                              style={{
+                                display: "inline-block",
+                                padding: "2px 6px",
+                                borderRadius: 4,
+                                fontSize: 10,
+                                fontWeight: 800,
+                                background: log.type === "대여" ? "rgba(99, 102, 241, 0.15)" : "rgba(16, 185, 129, 0.15)",
+                                color: log.type === "대여" ? ACCENT : OK,
+                              }}
+                            >
+                              {log.type === "대여" ? "대여" : "반납"}
+                            </span>
+                          </td>
+                          <td style={{ padding: "11px 14px", color: TEXT_MAIN, fontWeight: 600 }}>
+                            {log.name}
+                          </td>
+                          <td style={{ padding: "11px 14px", color: TEXT_DIM }}>
+                            <span className="mono" style={{ fontSize: 11, background: "rgba(255,255,255,0.04)", padding: "2px 5px", borderRadius: 3 }}>
+                              {log.location || "-"}
+                            </span>
+                          </td>
+                          <td style={{ padding: "11px 14px", textAlign: "center", color: TEXT_MAIN, fontWeight: 700 }}>
+                            {log.qty}개
+                          </td>
+                          <td style={{ padding: "11px 14px", color: TEXT_MAIN }}>
+                            {log.user}
+                          </td>
+                          <td style={{ padding: "11px 14px", color: TEXT_DIM, maxWidth: "240px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={log.note}>
+                            {log.note || "-"}
+                          </td>
+                          <td style={{ padding: "11px 14px", textAlign: "center" }}>
+                            {log.type === "대여" ? (
+                              isReturned ? (
+                                <button
+                                  disabled
+                                  style={{
+                                    background: isLightMode ? "rgba(16, 185, 129, 0.05)" : "rgba(16, 185, 129, 0.08)",
+                                    color: isLightMode ? "rgba(16, 185, 129, 0.6)" : "rgba(16, 185, 129, 0.5)",
+                                    border: isLightMode ? "1px solid rgba(16, 185, 129, 0.25)" : "1px solid rgba(16, 185, 129, 0.2)",
+                                    borderRadius: "6px",
+                                    padding: "4px 8px",
+                                    fontSize: "11px",
+                                    fontWeight: 700,
+                                    cursor: "not-allowed",
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: "3px",
+                                  }}
+                                >
+                                  <Check size={12} />
+                                  반납 완료
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => handleInstantReturn(log)}
+                                  disabled={isReturning}
+                                  style={{
+                                    background: isReturning ? "rgba(165,180,252,0.1)" : "rgba(16, 185, 129, 0.15)",
+                                    color: isReturning ? TEXT_DIM : OK,
+                                    border: `1px solid ${isReturning ? "transparent" : "rgba(16, 185, 129, 0.3)"}`,
+                                    borderRadius: "6px",
+                                    padding: "4px 8px",
+                                    fontSize: "11px",
+                                    fontWeight: 700,
+                                    cursor: isReturning ? "not-allowed" : "pointer",
+                                    transition: "all 0.15s",
+                                  }}
+                                  onMouseEnter={(e) => {
+                                    if (!isReturning) {
+                                      e.currentTarget.style.background = OK;
+                                      e.currentTarget.style.color = "#ffffff";
+                                    }
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    if (!isReturning) {
+                                      e.currentTarget.style.background = "rgba(16, 185, 129, 0.15)";
+                                      e.currentTarget.style.color = OK;
+                                    }
+                                  }}
+                                >
+                                  {isReturning ? "처리 중" : "즉시 반납"}
+                                </button>
+                              )
+                            ) : (
+                              <span style={{ color: TEXT_DIM }}>-</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+            
+            {/* Table Footer */}
+            <div style={{ padding: "10px 14px", borderTop: `1px solid ${PANEL_BORDER}`, display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--input-bg, #020617)", fontSize: 11, color: TEXT_DIM }}>
+              <div>전체 로그: {rentLogs.length}건 / 필터 결과: {filteredLogs.length}건</div>
+              <div>
+                {isGuestMode 
+                  ? "대여 및 반납 신청은 구글 스프레드시트에 즉시 저장되며, 실시간 재고에 자동 연동됩니다." 
+                  : <>대여 로그는 구글 스프레드시트의 <strong>RentLog</strong> 시트에 실시간 동기화됩니다.</>
+                }
+              </div>
+            </div>
           </div>
         </div>
-      )}
-    </aside>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ background: "var(--input-bg, #0f172a)", borderRadius: 6, padding: "7px 10px" }}>
-      <div style={{ fontSize: "10px", color: TEXT_DIM }}>{label}</div>
-      <div className="mono" style={{ fontSize: "13px", fontWeight: 600, marginTop: 2, color: TEXT_MAIN }}>
-        {value}
       </div>
+
+      {/* Animation Styles */}
+      <style>{`
+        @keyframes slideDown {
+          from { opacity: 0; transform: translateY(-10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
     </div>
   );
 }
-
-const actionBtnStyle = {
-  background: PANEL,
-  border: `1px solid ${PANEL_BORDER}`,
-  color: TEXT_MAIN,
-  borderRadius: 6,
-  padding: "9px 14px",
-  fontSize: "12.5px",
-  fontWeight: 600,
-  boxShadow: "none",
-};
-
-const stepBtnStyle = {
-  width: 24,
-  height: 24,
-  background: "transparent",
-  border: `1px solid ${PANEL_BORDER}`,
-  color: TEXT_MAIN,
-  borderRadius: 5,
-  fontSize: "14px",
-  lineHeight: 1,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: 0,
-};

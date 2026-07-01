@@ -135,9 +135,10 @@ function doPost(e) {
             }
             
             // Batch update E, F columns in 1 single write (leave G column/manager untouched)
+            // 클라이언트(접속 중인 컴퓨터)의 로컬 시간이 전달되면 그것을 사용하고, 없을 때만 서버 시간으로 대체
             sheet.getRange(rowIdx, 5, 1, 2).setValues([[
               nextStock === "" || nextStock == null ? "" : nextStock,
-              formatDate(new Date())
+              payload.timestamp || formatDate(new Date())
             ]]);
             break;
           }
@@ -354,7 +355,8 @@ function addRentLog(sheet, log) {
 function addInventoryItem(sheet, item) {
   const lastRow = sheet.getLastRow();
   const nextRow = lastRow + 1;
-  const nowStr = formatDate(new Date());
+  // 클라이언트(접속 중인 컴퓨터)의 로컬 시간이 전달되면 그것을 사용하고, 없을 때만 서버 시간으로 대체
+  const nowStr = item.updatedAt || formatDate(new Date());
   
   const rawStock = (item.stock === "N/A" || String(item.stock).toUpperCase() === "N/A") 
     ? "N/A" 
@@ -380,7 +382,8 @@ function updateInventoryItem(sheet, item) {
   const rowIndex = Number(item.rowIndex);
   if (!rowIndex || rowIndex < 2) throw new Error("올바르지 않은 행 인덱스: " + rowIndex);
   
-  const nowStr = formatDate(new Date());
+  // 클라이언트(접속 중인 컴퓨터)의 로컬 시간이 전달되면 그것을 사용하고, 없을 때만 서버 시간으로 대체
+  const nowStr = item.updatedAt || formatDate(new Date());
   const range = sheet.getRange(rowIndex, 1, 1, 9);
   const currentValues = range.getValues()[0];
   
