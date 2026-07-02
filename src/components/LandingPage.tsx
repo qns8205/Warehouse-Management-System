@@ -609,9 +609,10 @@ function getDefectLogs(sheet) {
   const logs = [];
   for (let i = 0; i < values.length; i++) {
     const row = values[i];
+    const rawTs = row[2] instanceof Date ? formatDate(row[2]) : (row[2] ? String(row[2]).trim() : (displayValues[i][2] || ""));
     logs.push({
       rowIndex: i + 2,
-      timestamp: row[2] instanceof Date ? formatDate(row[2]) : (row[2] ? String(row[2]).trim() : (displayValues[i][2] || "")),
+      timestamp: rawTs.replace(/^'/, ""),
       location: "",
       name: String(row[0] || "").trim(),
       qty: row[1] === "" ? null : Number(row[1]),

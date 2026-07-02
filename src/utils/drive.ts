@@ -153,6 +153,207 @@ export function getApproximateSubstringDistance(text: string, query: string): nu
   return dp[m];
 }
 
+const TRANSLATION_DICTIONARY: { [key: string]: string[] } = {
+  // English key to Korean translations
+  "gripper": ["그리퍼"],
+  "box": ["박스", "상자"],
+  "sensor": ["센서"],
+  "jig": ["지그"],
+  "cylinder": ["실린더"],
+  "cable": ["케이블", "선"],
+  "motor": ["모터"],
+  "connector": ["커넥터"],
+  "adapter": ["어댑터", "아답터"],
+  "living": ["리빙"],
+  "livingbox": ["리빙박스"],
+  "frame": ["프레임"],
+  "valve": ["밸브"],
+  "switch": ["스위치"],
+  "bracket": ["브라켓", "브래킷"],
+  "bolt": ["볼트"],
+  "nut": ["너트"],
+  "washer": ["와셔"],
+  "screw": ["스크류", "스크루"],
+  "bearing": ["베어링"],
+  "coupling": ["커플링"],
+  "plate": ["플레이트", "판"],
+  "shaft": ["샤프트", "축"],
+  "guide": ["가이드"],
+  "filter": ["필터"],
+  "fitting": ["피팅"],
+  "hose": ["호스"],
+  "tube": ["튜브"],
+  "wrench": ["렌치"],
+  "driver": ["드라이버"],
+  "tool": ["공구"],
+  "tape": ["테이프"],
+  "magnet": ["자석"],
+  "spring": ["스프링"],
+  "pin": ["핀"],
+  "ring": ["링"],
+  "clamp": ["클램프"],
+  "multitap": ["멀티탭"],
+  "powerstrip": ["멀티탭"],
+  "led": ["엘이디"],
+  "camera": ["카메라"],
+  "module": ["모듈"],
+  "battery": ["배터리", "밧데리"],
+  "charger": ["충전기"],
+  "drive": ["드라이브"],
+  "inverter": ["인버터"],
+  "shield": ["실드"],
+  "switching": ["스위칭"],
+  "power": ["파워"],
+  "supply": ["서플라이"],
+  "encoder": ["엔코더"],
+  "solenoid": ["솔레노이드"],
+  "elbow": ["엘보"],
+  "speed": ["스피드"],
+  "controller": ["컨트롤러"],
+  "regulator": ["레귤레이터"],
+  "relay": ["릴레이"],
+  "socket": ["소켓"],
+  "terminal": ["터미널"],
+  "block": ["블록", "블럭"],
+  "cabletie": ["케이블타이"],
+  "tie": ["타이"],
+  "spacer": ["스페이서"],
+  "support": ["서포트"],
+  "coupler": ["커플러"],
+  "joint": ["조인트"],
+  "bushing": ["부싱"],
+  "gear": ["기어"],
+  "pulley": ["풀리"],
+  "belt": ["벨트"],
+  "chain": ["체인"],
+  "wheel": ["휠"],
+  "roller": ["롤러"],
+  "hinge": ["힌지"],
+  "handle": ["핸들"],
+  "knob": ["노브"],
+  "latch": ["래치"],
+  "sensorbracket": ["센서브라켓"],
+  "transparent": ["투명"],
+  "clear": ["투명"],
+  "opaque": ["불투명"],
+
+  // Korean key to English translations
+  "그리퍼": ["gripper"],
+  "박스": ["box"],
+  "상자": ["box"],
+  "센서": ["sensor"],
+  "지그": ["jig"],
+  "실린더": ["cylinder"],
+  "케이블": ["cable"],
+  "모터": ["motor"],
+  "커넥터": ["connector"],
+  "어댑터": ["adapter"],
+  "아답터": ["adapter"],
+  "리빙": ["living"],
+  "리빙박스": ["livingbox", "living box"],
+  "프레임": ["frame"],
+  "밸브": ["valve"],
+  "스위치": ["switch"],
+  "브라켓": ["bracket"],
+  "브래킷": ["bracket"],
+  "볼트": ["bolt"],
+  "너트": ["nut"],
+  "와셔": ["washer"],
+  "스크류": ["screw"],
+  "스크루": ["screw"],
+  "베어링": ["bearing"],
+  "커플링": ["coupling"],
+  "플레이트": ["plate"],
+  "샤프트": ["shaft"],
+  "가이드": ["guide"],
+  "필터": ["filter"],
+  "피팅": ["fitting"],
+  "호스": ["hose"],
+  "튜브": ["tube"],
+  "렌치": ["wrench"],
+  "드라이버": ["driver"],
+  "공구": ["tool"],
+  "테이프": ["tape"],
+  "자석": ["magnet"],
+  "스프링": ["spring"],
+  "핀": ["pin"],
+  "링": ["ring"],
+  "클램프": ["clamp"],
+  "멀티탭": ["multitap", "powerstrip", "power strip"],
+  "엘이디": ["led"],
+  "카메라": ["camera"],
+  "모듈": ["module"],
+  "배터리": ["battery"],
+  "밧데리": ["battery"],
+  "충전기": ["charger"],
+  "드라이브": ["drive"],
+  "인버터": ["inverter"],
+  "실드": ["shield"],
+  "스위칭": ["switching"],
+  "파워": ["power"],
+  "서플라이": ["supply"],
+  "엔코더": ["encoder"],
+  "솔레노이드": ["solenoid"],
+  "엘보": ["elbow"],
+  "스피드": ["speed"],
+  "컨트롤러": ["controller"],
+  "레귤레이터": ["regulator"],
+  "릴레이": ["relay"],
+  "소켓": ["socket"],
+  "터미널": ["terminal"],
+  "블록": ["block"],
+  "블럭": ["block"],
+  "케이블타이": ["cabletie", "cable tie"],
+  "타이": ["tie"],
+  "스페이서": ["spacer"],
+  "서포트": ["support"],
+  "커플러": ["coupler"],
+  "조인트": ["joint"],
+  "부싱": ["bushing"],
+  "기어": ["gear"],
+  "풀리": ["pulley"],
+  "벨트": ["belt"],
+  "체인": ["chain"],
+  "휠": ["wheel"],
+  "롤러": ["roller"],
+  "힌지": ["hinge"],
+  "핸들": ["handle"],
+  "노브": ["knob"],
+  "래치": ["latch"],
+  "센서브라켓": ["sensorbracket", "sensor bracket"],
+  "투명": ["transparent", "clear"],
+  "불투명": ["opaque"]
+};
+
+function getTermVariants(term: string): string[] {
+  const clean = term.replace(/\s+/g, "").toLowerCase();
+  const variants = [clean];
+
+  // 1. Direct dictionary lookup
+  if (TRANSLATION_DICTIONARY[clean]) {
+    for (const v of TRANSLATION_DICTIONARY[clean]) {
+      const cv = v.replace(/\s+/g, "").toLowerCase();
+      if (!variants.includes(cv)) {
+        variants.push(cv);
+      }
+    }
+  }
+
+  // 2. Substring substitution for suffixes/postpositions (e.g., "그리퍼용" contains "그리퍼")
+  for (const key of Object.keys(TRANSLATION_DICTIONARY)) {
+    if (key.length >= 2 && clean.includes(key)) {
+      for (const translation of TRANSLATION_DICTIONARY[key]) {
+        const substituted = clean.replace(key, translation.replace(/\s+/g, "").toLowerCase());
+        if (!variants.includes(substituted)) {
+          variants.push(substituted);
+        }
+      }
+    }
+  }
+
+  return variants;
+}
+
 export function isFuzzyMatch(text: string, query: string): boolean {
   if (!query) return true;
   if (!text) return false;
@@ -165,24 +366,32 @@ export function isFuzzyMatch(text: string, query: string): boolean {
     return true;
   }
 
-  // 2. Split query into terms to support out-of-order matching or multiple conditions
+  // 2. Split query into terms to support out-of-order matching or translation
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  if (terms.length > 1) {
-    // Every term must be fuzzy matched in the text
+  if (terms.length > 0) {
+    // Every term must be matched in some form
     return terms.every(term => {
       const cleanTerm = term.replace(/\s+/g, "");
       if (!cleanTerm) return true;
+
+      // Get translation variants for this term
+      const variants = getTermVariants(cleanTerm);
+
+      // Check if any variant is a substring of the text
+      const hasSubmatch = variants.some(v => cleanText.includes(v));
+      if (hasSubmatch) return true;
+
+      // Only perform approximate string distance / fuzzy matching for longer words (length >= 4)
+      // This protects short, precise queries (like "m3", "box", "jig", "a3") from matching false positives.
       const tLen = cleanTerm.length;
-      if (cleanText.includes(cleanTerm)) return true;
-      if (tLen < 2) return false; // short queries require exact match
-      const maxDist = tLen <= 4 ? 1 : 2;
-      return getApproximateSubstringDistance(cleanText, cleanTerm) <= maxDist;
+      if (tLen >= 4) {
+        const maxDist = tLen <= 5 ? 1 : 2;
+        return variants.some(v => getApproximateSubstringDistance(cleanText, v) <= maxDist);
+      }
+
+      return false;
     });
   }
 
-  // 3. Single term fuzzy match
-  const qLen = cleanQuery.length;
-  if (qLen < 2) return false; // Too short for typo tolerance
-  const maxDistance = qLen <= 4 ? 1 : 2;
-  return getApproximateSubstringDistance(cleanText, cleanQuery) <= maxDistance;
+  return false;
 }
