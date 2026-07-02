@@ -5,6 +5,7 @@ import { parseLocation } from "../utils/drive";
 interface ItemFormModalProps {
   item: InventoryItem | null;
   defaultRackId: string;
+  defaultLocation?: string | null;
   racks: Rack[];
   onSave: (item: any) => void;
   onClose: () => void;
@@ -21,13 +22,19 @@ const ACCENT_SOFT = "#818cf8";
 export default function ItemFormModal({
   item,
   defaultRackId,
+  defaultLocation,
   racks,
   onSave,
   onClose,
   defaultManager,
 }: ItemFormModalProps) {
-  const initialRack = item ? parseLocation(item.location).rack : defaultRackId || (racks[0] && racks[0].id) || "";
-  const initialShelfNum = item ? parseLocation(item.location).shelf : "";
+  const parsedLoc = defaultLocation ? parseLocation(defaultLocation) : null;
+  const initialRack = item 
+    ? parseLocation(item.location).rack 
+    : (parsedLoc ? parsedLoc.rack : defaultRackId || (racks[0] && racks[0].id) || "");
+  const initialShelfNum = item 
+    ? parseLocation(item.location).shelf 
+    : (defaultLocation || "");
 
   const [form, setForm] = useState<Omit<InventoryItem, "rowIndex"> & { rowIndex?: number }>(
     item
@@ -236,6 +243,15 @@ export default function ItemFormModal({
               value={form.name}
               onChange={(e) => update("name", e.target.value)}
               placeholder="품목 이름 입력"
+              style={{ width: "100%" }}
+            />
+          </Field>
+
+          <Field label="선반 내 서브 분류 (예: 공구, M2 규격, M3 규격 등)">
+            <input
+              value={form.spec}
+              onChange={(e) => update("spec", e.target.value)}
+              placeholder="선반 내에서 구분할 서브 분류 입력 (미입력 시 '기타')"
               style={{ width: "100%" }}
             />
           </Field>

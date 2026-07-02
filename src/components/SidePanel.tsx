@@ -10,7 +10,7 @@ interface SidePanelProps {
   onUpdateRack: (fields: Partial<Rack>) => void;
   onDeleteRack: () => void;
   onEditItem: (item: InventoryItem) => void;
-  onAddItem: () => void;
+  onAddItem: (defaultLocation?: string) => void;
   onDeleteItem: (rowIndex: number) => void;
   highlightShelf: string | null;
   highlightedItemRowIndex?: number | null;
@@ -56,6 +56,8 @@ export default function SidePanel({
   const [editingStockItemRowIndex, setEditingStockItemRowIndex] = useState<number | null>(null);
   const [editingStockValue, setEditingStockValue] = useState<string>("");
 
+  const [lastActiveShelf, setLastActiveShelf] = useState<string | null>(null);
+
   const handleSaveStockInline = (item: InventoryItem) => {
     setEditingStockItemRowIndex(null);
     const parsed = parseInt(editingStockValue, 10);
@@ -77,12 +79,18 @@ export default function SidePanel({
         initialExpanded[s.shelf] = true;
       });
       setExpandedShelves(initialExpanded);
+      if (shelvesWithItems.length > 0) {
+        setLastActiveShelf(shelvesWithItems[0].shelf);
+      } else {
+        setLastActiveShelf(null);
+      }
     }
   }, [rack, shelvesWithItems.length]); // eslint-disable-line
 
   useEffect(() => {
     if (highlightShelf) {
       setExpandedShelves((prev) => ({ ...prev, [highlightShelf]: true }));
+      setLastActiveShelf(highlightShelf);
       // Wait a little for the side panel expansion to complete, then scroll smoothly
       setTimeout(() => {
         const element = document.getElementById(`shelf-container-${highlightShelf}`);
@@ -107,6 +115,7 @@ export default function SidePanel({
       if (foundShelf) {
         // Expand the corresponding shelf
         setExpandedShelves((prev) => ({ ...prev, [foundShelf!]: true }));
+        setLastActiveShelf(foundShelf);
       }
 
       // Smooth scroll to the specific item card
@@ -155,7 +164,13 @@ export default function SidePanel({
   const totalItems = shelvesWithItems.reduce((sum, s) => sum + s.items.length, 0);
 
   const toggleShelf = (shelf: string) => {
-    setExpandedShelves((prev) => ({ ...prev, [shelf]: !prev[shelf] }));
+    setExpandedShelves((prev) => {
+      const isCurrentlyExpanded = !prev[shelf];
+      if (isCurrentlyExpanded) {
+        setLastActiveShelf(shelf);
+      }
+      return { ...prev, [shelf]: isCurrentlyExpanded };
+    });
   };
 
   return (
@@ -310,7 +325,7 @@ export default function SidePanel({
         </div>
         {isAdmin && (
           <button
-            onClick={onAddItem}
+            onClick={() => onAddItem(lastActiveShelf || (shelvesWithItems[0] ? shelvesWithItems[0].shelf : undefined))}
             style={{
               background: "transparent",
               border: `1px solid ${ACCENT}`,
@@ -338,396 +353,472 @@ export default function SidePanel({
           </div>
         ) : (
           shelvesWithItems.map(({ shelf, items }) => {
-            const shelfStock = items.reduce((s, it) => s + (typeof it.stock === "number" ? it.stock : 0), 0);
+            // Group items inside this shelf by spec (which represents "서브 분류")
+            // 1. Sort all shelf items alphabetically first (Korean, then English, then Numbers)
+            const sortedShelfItems = [...items].sort((a, b) => {
+              const nameA = a.name || "";
+              const nameB = b.name || "";
+              return nameA.localeCompare(nameB, "ko", { sensitivity: "base", numeric: true });
+            });
+
+            // 2. Group sorted items by subcategory (spec field)
+            const groupedBySubcategory: { [subKey: string]: InventoryItem[] } = {};
+            sortedShelfItems.forEach((it) => {
+              const sub = (it.spec || "").trim();
+              const subKey = sub === "" ? "기타" : sub;
+              if (!groupedBySubcategory[subKey]) {
+                groupedBySubcategory[subKey] = [];
+              }
+              groupedBySubcategory[subKey].push(it);
+            });
+
+            // 3. Sort subcategories alphabetically, but put '기타' at the very end
+            const sortedSubcategories = Object.keys(groupedBySubcategory).sort((a, b) => {
+              if (a === "기타") return 1;
+              if (b === "기타") return -1;
+              return a.localeCompare(b, "ko", { sensitivity: "base", numeric: true });
+            });
+
             const isHighlighted = highlightShelf === shelf;
             const isExpanded = !!expandedShelves[shelf];
 
             return (
               <div id={`shelf-container-${shelf}`} key={shelf} style={{ marginBottom: 12, position: "relative" }}>
-                {/* Shelf Title Button */}
-                <button
-                  onClick={() => toggleShelf(shelf)}
-                  style={{
-                    position: "sticky",
-                    top: 0,
-                    zIndex: 10,
-                    width: "100%",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    background: isHighlighted 
-                      ? "rgba(245, 158, 11, 0.95)" 
-                      : (isLightMode ? "rgba(241, 245, 249, 0.95)" : "rgba(30, 41, 59, 0.95)"),
-                    backdropFilter: "blur(4px)",
-                    border: `2px solid ${isHighlighted ? "#f59e0b" : hexToRgba(rack.color, 0.4)}`,
-                    boxShadow: isHighlighted ? "0 4px 12px rgba(245, 158, 11, 0.4)" : "0 2px 6px rgba(0, 0, 0, 0.08)",
-                    borderRadius: 6,
-                    padding: "8px 10px",
-                    marginBottom: 6,
-                    transition: "all 0.3s ease-in-out",
-                    cursor: "pointer",
-                  }}
-                >
-                  <span className="mono" style={{ fontSize: "12.5px", fontWeight: 700, color: isHighlighted ? "#ffffff" : (isLightMode ? "#0f172a" : TEXT_MAIN) }}>
-                    {isHighlighted ? `🔍 ${shelf} (검색됨)` : shelf}
-                  </span>
-                  <span style={{ fontSize: "11px", color: isHighlighted ? "#ffffff" : TEXT_DIM, display: "flex", alignItems: "center", gap: 4 }}>
-                    {items.length}개 품목 {isExpanded ? "▲" : "▼"}
-                  </span>
-                </button>
+                {/* Shelf Title & Add Button Container */}
+                <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6, position: "sticky", top: 0, zIndex: 10 }}>
+                  <button
+                    onClick={() => toggleShelf(shelf)}
+                    style={{
+                      flex: 1,
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      background: isHighlighted 
+                        ? "rgba(245, 158, 11, 0.95)" 
+                        : (isLightMode ? "rgba(241, 245, 249, 0.95)" : "rgba(30, 41, 59, 0.95)"),
+                      backdropFilter: "blur(4px)",
+                      border: `2px solid ${isHighlighted ? "#f59e0b" : hexToRgba(rack.color, 0.4)}`,
+                      boxShadow: isHighlighted ? "0 4px 12px rgba(245, 158, 11, 0.4)" : "0 2px 6px rgba(0, 0, 0, 0.08)",
+                      borderRadius: 6,
+                      padding: "8px 10px",
+                      transition: "all 0.3s ease-in-out",
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                  >
+                    <span className="mono" style={{ fontSize: "12.5px", fontWeight: 700, color: isHighlighted ? "#ffffff" : (isLightMode ? "#0f172a" : TEXT_MAIN) }}>
+                      {isHighlighted ? `🔍 ${shelf} (검색됨)` : shelf}
+                    </span>
+                    <span style={{ fontSize: "11px", color: isHighlighted ? "#ffffff" : TEXT_DIM, display: "flex", alignItems: "center", gap: 4 }}>
+                      {items.length}개 품목 {isExpanded ? "▲" : "▼"}
+                    </span>
+                  </button>
 
-                {/* Shelf Items List */}
+                  {isAdmin && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onAddItem(shelf);
+                      }}
+                      style={{
+                        background: isLightMode ? "#e2e8f0" : "rgba(255, 255, 255, 0.06)",
+                        border: `1px solid ${PANEL_BORDER}`,
+                        borderRadius: 6,
+                        width: 34,
+                        height: 34,
+                        color: ACCENT,
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                      }}
+                      title={`${shelf} 선반에 바로 신규 등록`}
+                    >
+                      <Plus size={16} />
+                    </button>
+                  )}
+                </div>
+
+                {/* Shelf Items List (Grouped by Subcategory) */}
                 {isExpanded && (
-                  <div style={{ paddingLeft: 4, display: "flex", flexDirection: "column", gap: 8 }}>
-                    {items.map((item) => {
-                      const hasImage = !!item.photo;
-                      const imageUrl = hasImage ? getGoogleDriveImageUrl(item.photo) : "";
-                      const isItemHighlighted = highlightedItemRowIndex === item.rowIndex;
-
+                  <div style={{ paddingLeft: 4, display: "flex", flexDirection: "column", gap: 10 }}>
+                    {sortedSubcategories.map((subName) => {
+                      const subItems = groupedBySubcategory[subName];
                       return (
-                        <div
-                          id={`item-card-${item.rowIndex}`}
-                          key={item.rowIndex}
-                          style={{
-                            background: isItemHighlighted ? "rgba(245, 158, 11, 0.12)" : "var(--input-bg, #0f172a)",
-                            border: isItemHighlighted ? "2px solid #f59e0b" : `1px solid ${PANEL_BORDER}`,
-                            boxShadow: isItemHighlighted ? "0 0 14px rgba(245, 158, 11, 0.45)" : "none",
-                            borderRadius: 8,
-                            padding: "10px 12px",
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: 8,
-                            transition: "all 0.3s ease-in-out",
-                          }}
-                        >
-                          {/* Photo and basic info row */}
-                          <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-                            {/* Image Visualizer */}
-                            <div
-                              onClick={() => {
-                                if (hasImage) {
-                                  setZoomImageUrl(imageUrl);
-                                  setZoomImageName(item.name || "(이름 없음)");
-                                }
-                              }}
-                              title={hasImage ? "클릭하여 사진 확대" : undefined}
+                        <div key={subName} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                          {/* Subcategory Visual Divider & Badge */}
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, marginBottom: 2 }}>
+                            <span
                               style={{
-                                width: 56,
-                                height: 56,
-                                background: "var(--app-bg, #1b1c21)",
-                                border: `1px solid ${PANEL_BORDER}`,
-                                borderRadius: 6,
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                overflow: "hidden",
-                                flexShrink: 0,
-                                position: "relative",
-                                cursor: hasImage ? "pointer" : "default",
+                                fontSize: "11px",
+                                fontWeight: 700,
+                                color: isLightMode ? "#4f46e5" : ACCENT,
+                                background: isLightMode ? "rgba(79, 70, 229, 0.08)" : "rgba(168, 166, 160, 0.12)",
+                                padding: "2px 8px",
+                                borderRadius: 12,
+                                border: `1px solid ${isLightMode ? "rgba(79, 70, 229, 0.2)" : PANEL_BORDER}`,
+                                whiteSpace: "nowrap",
                               }}
                             >
-                              {hasImage ? (
-                                <img
-                                  src={imageUrl}
-                                  alt={item.name}
-                                  referrerPolicy="no-referrer"
-                                  style={{
-                                    width: "100%",
-                                    height: "100%",
-                                    objectFit: "cover",
-                                  }}
-                                  onError={(e) => {
-                                    // Fallback to placeholder if image load fails (e.g. invalid url/permissions)
-                                    (e.target as HTMLElement).style.display = "none";
-                                    const sibling = (e.target as HTMLElement).nextElementSibling;
-                                    if (sibling) (sibling as HTMLElement).style.display = "flex";
-                                  }}
-                                />
-                              ) : null}
+                              📁 {subName}
+                            </span>
+                            <div style={{ flex: 1, height: "1px", background: PANEL_BORDER, opacity: 0.5 }} />
+                            <span style={{ fontSize: "10.5px", color: TEXT_DIM, marginRight: 2 }}>{subItems.length}개</span>
+                          </div>
+
+                          {/* Items belonging to this subcategory */}
+                          {subItems.map((item) => {
+                            const hasImage = !!item.photo;
+                            const imageUrl = hasImage ? getGoogleDriveImageUrl(item.photo) : "";
+                            const isItemHighlighted = highlightedItemRowIndex === item.rowIndex;
+
+                            return (
                               <div
+                                id={`item-card-${item.rowIndex}`}
+                                key={item.rowIndex}
                                 style={{
-                                  display: hasImage ? "none" : "flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  width: "100%",
-                                  height: "100%",
+                                  background: isItemHighlighted ? "rgba(245, 158, 11, 0.12)" : "var(--input-bg, #0f172a)",
+                                  border: isItemHighlighted ? "2px solid #f59e0b" : `1px solid ${PANEL_BORDER}`,
+                                  boxShadow: isItemHighlighted ? "0 0 14px rgba(245, 158, 11, 0.45)" : "none",
+                                  borderRadius: 8,
+                                  padding: "10px 12px",
+                                  display: "flex",
+                                  flexDirection: "column",
+                                  gap: 8,
+                                  transition: "all 0.3s ease-in-out",
                                 }}
                               >
-                                <Image size={18} style={{ color: TEXT_DIM }} />
-                              </div>
-                            </div>
-
-                            {/* Item name, note (Column H), and links */}
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div
-                                style={{
-                                  fontSize: "13px",
-                                  fontWeight: 600,
-                                  color: TEXT_MAIN,
-                                  whiteSpace: "nowrap",
-                                  overflow: "hidden",
-                                  textOverflow: "ellipsis",
-                                }}
-                                title={item.name}
-                              >
-                                {item.name || "(이름 없음)"}
-                              </div>
-
-                              {/* Column H note display */}
-                              <div style={{ display: "block", marginTop: 4 }}>
-                                {item.note ? (
+                                {/* Photo and basic info row */}
+                                <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                                  {/* Image Visualizer */}
                                   <div
-                                    style={{
-                                      fontSize: "11.5px",
-                                      fontWeight: 500,
-                                      color: TEXT_MAIN,
-                                      background: "rgba(245, 158, 11, 0.08)",
-                                      border: "1px solid rgba(245, 158, 11, 0.2)",
-                                      padding: "3px 8px",
-                                      borderRadius: 5,
-                                      display: "inline-block",
-                                      maxWidth: "100%",
-                                      wordBreak: "break-all",
+                                    onClick={() => {
+                                      if (hasImage) {
+                                        setZoomImageUrl(imageUrl);
+                                        setZoomImageName(item.name || "(이름 없음)");
+                                      }
                                     }}
-                                    title={`특이사항: ${item.note}`}
-                                  >
-                                    📝 {item.note}
-                                  </div>
-                                ) : (
-                                  <div style={{ fontSize: "10.5px", color: TEXT_DIM, fontStyle: "italic" }}>
-                                    특이사항 없음
-                                  </div>
-                                )}
-                              </div>
-
-                              {item.link && item.link !== "N/A" ? (
-                                <div style={{ display: "block", marginTop: 6 }}>
-                                  <a
-                                    href={item.link}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
+                                    title={hasImage ? "클릭하여 사진 확대" : undefined}
                                     style={{
-                                      fontSize: "10.5px",
-                                      color: ACCENT,
-                                      display: "inline-flex",
+                                      width: 56,
+                                      height: 56,
+                                      background: "var(--app-bg, #1b1c21)",
+                                      border: `1px solid ${PANEL_BORDER}`,
+                                      borderRadius: 6,
+                                      display: "flex",
                                       alignItems: "center",
-                                      gap: 3,
-                                      textDecoration: "none",
+                                      justifyContent: "center",
+                                      overflow: "hidden",
+                                      flexShrink: 0,
+                                      position: "relative",
+                                      cursor: hasImage ? "pointer" : "default",
                                     }}
                                   >
-                                    구매 링크
-                                    <ExternalLink size={10} />
-                                  </a>
-                                </div>
-                              ) : null}
-                            </div>
-                          </div>
-
-                          {/* Footer action row: +/- adjustments or 대여/반납 buttons */}
-                          <div
-                            style={{
-                              display: "flex",
-                              flexDirection: "column",
-                              gap: 6,
-                              borderTop: `1px solid ${PANEL_BORDER}`,
-                              paddingTop: 8,
-                              marginTop: 2,
-                            }}
-                          >
-                            {isAdmin ? (
-                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                                {/* Stock modifier buttons */}
-                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                  <button
-                                    onClick={() => onChangeStock(item, -1)}
-                                    disabled={typeof item.stock !== "number" || item.stock <= 0}
-                                    style={{
-                                      ...stepBtnStyle,
-                                      opacity: typeof item.stock !== "number" || item.stock <= 0 ? 0.35 : 1,
-                                      cursor: typeof item.stock !== "number" || item.stock <= 0 ? "not-allowed" : "pointer",
-                                    }}
-                                  >
-                                    −
-                                  </button>
-                                  {editingStockItemRowIndex === item.rowIndex ? (
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      value={editingStockValue}
-                                      onChange={(e) => setEditingStockValue(e.target.value)}
-                                      onBlur={() => handleSaveStockInline(item)}
-                                      onKeyDown={(e) => {
-                                        if (e.key === "Enter") {
-                                          handleSaveStockInline(item);
-                                        } else if (e.key === "Escape") {
-                                          setEditingStockItemRowIndex(null);
-                                        }
-                                      }}
-                                      autoFocus
+                                    {hasImage ? (
+                                      <img
+                                        src={imageUrl}
+                                        alt={item.name}
+                                        referrerPolicy="no-referrer"
+                                        style={{
+                                          width: "100%",
+                                          height: "100%",
+                                          objectFit: "cover",
+                                        }}
+                                        onError={(e) => {
+                                          (e.target as HTMLElement).style.display = "none";
+                                          const sibling = (e.target as HTMLElement).nextElementSibling;
+                                          if (sibling) (sibling as HTMLElement).style.display = "flex";
+                                        }}
+                                      />
+                                    ) : null}
+                                    <div
                                       style={{
-                                        width: "48px",
-                                        background: isLightMode ? "#ffffff" : "#020617",
-                                        border: `1.5px solid ${ACCENT}`,
-                                        borderRadius: "4px",
-                                        color: isLightMode ? "#0f172a" : "#ffffff",
-                                        textAlign: "center",
-                                        fontSize: "12px",
-                                        fontWeight: 700,
-                                        outline: "none",
-                                        padding: "1px 2px",
+                                        display: hasImage ? "none" : "flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                        width: "100%",
+                                        height: "100%",
                                       }}
-                                    />
+                                    >
+                                      <Image size={18} style={{ color: TEXT_DIM }} />
+                                    </div>
+                                  </div>
+
+                                  {/* Item name, note (Column H), and links */}
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div
+                                      style={{
+                                        fontSize: "13px",
+                                        fontWeight: 600,
+                                        color: TEXT_MAIN,
+                                        whiteSpace: "nowrap",
+                                        overflow: "hidden",
+                                        textOverflow: "ellipsis",
+                                      }}
+                                      title={item.name}
+                                    >
+                                      {item.name || "(이름 없음)"}
+                                    </div>
+
+                                    {/* Column H note display */}
+                                    <div style={{ display: "block", marginTop: 4 }}>
+                                      {item.note ? (
+                                        <div
+                                          style={{
+                                            fontSize: "11.5px",
+                                            fontWeight: 500,
+                                            color: TEXT_MAIN,
+                                            background: "rgba(245, 158, 11, 0.08)",
+                                            border: "1px solid rgba(245, 158, 11, 0.2)",
+                                            padding: "3px 8px",
+                                            borderRadius: 5,
+                                            display: "inline-block",
+                                            maxWidth: "100%",
+                                            wordBreak: "break-all",
+                                          }}
+                                          title={`특이사항: ${item.note}`}
+                                        >
+                                          📝 {item.note}
+                                        </div>
+                                      ) : (
+                                        <div style={{ fontSize: "10.5px", color: TEXT_DIM, fontStyle: "italic" }}>
+                                          특이사항 없음
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    {item.link && item.link !== "N/A" ? (
+                                      <div style={{ display: "block", marginTop: 6 }}>
+                                        <a
+                                          href={item.link}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          style={{
+                                            fontSize: "10.5px",
+                                            color: ACCENT,
+                                            display: "inline-flex",
+                                            alignItems: "center",
+                                            gap: 3,
+                                            textDecoration: "none",
+                                          }}
+                                        >
+                                          구매 링크
+                                          <ExternalLink size={10} />
+                                        </a>
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                </div>
+
+                                {/* Footer action row */}
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    flexDirection: "column",
+                                    gap: 6,
+                                    borderTop: `1px solid ${PANEL_BORDER}`,
+                                    paddingTop: 8,
+                                    marginTop: 2,
+                                  }}
+                                >
+                                  {isAdmin ? (
+                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                      {/* Stock modifier buttons */}
+                                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                        <button
+                                          onClick={() => onChangeStock(item, -1)}
+                                          disabled={typeof item.stock !== "number" || item.stock <= 0}
+                                          style={{
+                                            ...stepBtnStyle,
+                                            opacity: typeof item.stock !== "number" || item.stock <= 0 ? 0.35 : 1,
+                                            cursor: typeof item.stock !== "number" || item.stock <= 0 ? "not-allowed" : "pointer",
+                                          }}
+                                        >
+                                          −
+                                        </button>
+                                        {editingStockItemRowIndex === item.rowIndex ? (
+                                          <input
+                                            type="number"
+                                            min="0"
+                                            value={editingStockValue}
+                                            onChange={(e) => setEditingStockValue(e.target.value)}
+                                            onBlur={() => handleSaveStockInline(item)}
+                                            onKeyDown={(e) => {
+                                              if (e.key === "Enter") {
+                                                handleSaveStockInline(item);
+                                              } else if (e.key === "Escape") {
+                                                setEditingStockItemRowIndex(null);
+                                              }
+                                            }}
+                                            autoFocus
+                                            style={{
+                                              width: "48px",
+                                              background: isLightMode ? "#ffffff" : "#020617",
+                                              border: `1.5px solid ${ACCENT}`,
+                                              borderRadius: "4px",
+                                              color: isLightMode ? "#0f172a" : "#ffffff",
+                                              textAlign: "center",
+                                              fontSize: "12px",
+                                              fontWeight: 700,
+                                              outline: "none",
+                                              padding: "1px 2px",
+                                            }}
+                                          />
+                                        ) : (
+                                          <span
+                                            className="mono"
+                                            onClick={() => {
+                                              if (typeof item.stock === "number") {
+                                                setEditingStockItemRowIndex(item.rowIndex);
+                                                setEditingStockValue(String(item.stock));
+                                              }
+                                            }}
+                                            title={typeof item.stock === "number" ? "수량 직접 입력하려면 클릭" : "N/A 수량은 직접 수정할 수 없습니다."}
+                                            style={{
+                                              fontSize: "12.5px",
+                                              fontWeight: 700,
+                                              minWidth: 26,
+                                              textAlign: "center",
+                                              color: item.stock === 0 ? DANGER : (item.stock === null || item.stock === "N/A") ? TEXT_DIM : OK,
+                                              cursor: typeof item.stock === "number" ? "pointer" : "default",
+                                              padding: "2px 6px",
+                                              borderRadius: "4px",
+                                              background: isLightMode ? "rgba(0,0,0,0.03)" : "rgba(255,255,255,0.05)",
+                                              border: "1px solid transparent",
+                                              transition: "all 0.15s",
+                                            }}
+                                            onMouseEnter={(e) => {
+                                              if (typeof item.stock === "number") {
+                                                e.currentTarget.style.border = `1px dashed ${ACCENT}`;
+                                                e.currentTarget.style.background = isLightMode ? "rgba(99, 102, 241, 0.08)" : "rgba(99, 102, 241, 0.15)";
+                                              }
+                                            }}
+                                            onMouseLeave={(e) => {
+                                              e.currentTarget.style.border = "1px solid transparent";
+                                              e.currentTarget.style.background = isLightMode ? "rgba(0,0,0,0.03)" : "rgba(255,255,255,0.05)";
+                                            }}
+                                          >
+                                            {item.stock === null || item.stock === "N/A" ? "N/A" : item.stock}
+                                          </span>
+                                        )}
+                                        <button
+                                          onClick={() => onChangeStock(item, 1)}
+                                          disabled={typeof item.stock !== "number"}
+                                          style={{
+                                            ...stepBtnStyle,
+                                            opacity: typeof item.stock !== "number" ? 0.35 : 1,
+                                            cursor: typeof item.stock !== "number" ? "not-allowed" : "pointer",
+                                          }}
+                                        >
+                                          +
+                                        </button>
+                                      </div>
+
+                                      {/* Manager/Date and buttons */}
+                                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+                                          <span style={{ fontSize: "10px", color: TEXT_DIM }}>
+                                            {item.manager || "담당자 없음"}
+                                          </span>
+                                          <span style={{ fontSize: "9px", color: TEXT_DIM, marginTop: 1 }}>
+                                            {item.updatedAt ? item.updatedAt.split(" ")[0] : ""}
+                                          </span>
+                                        </div>
+                                        <div style={{ display: "flex", gap: 6 }}>
+                                          <button
+                                            onClick={() => onEditItem(item)}
+                                            title="수정"
+                                            style={{
+                                              background: "transparent",
+                                              border: "none",
+                                              color: TEXT_DIM,
+                                              cursor: "pointer",
+                                              padding: 2,
+                                            }}
+                                          >
+                                            <Edit3 size={12} />
+                                          </button>
+                                          <button
+                                            onClick={() => onDeleteItem(item.rowIndex)}
+                                            title="삭제"
+                                            style={{
+                                              background: "transparent",
+                                              border: "none",
+                                              color: DANGER,
+                                              cursor: "pointer",
+                                              padding: 2,
+                                            }}
+                                          >
+                                            <Trash2 size={12} />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </div>
                                   ) : (
-                                    <span
-                                      className="mono"
-                                      onClick={() => {
-                                        if (typeof item.stock === "number") {
-                                          setEditingStockItemRowIndex(item.rowIndex);
-                                          setEditingStockValue(String(item.stock));
-                                        }
-                                      }}
-                                      title={typeof item.stock === "number" ? "수량 직접 입력하려면 클릭" : "N/A 수량은 직접 수정할 수 없습니다."}
-                                      style={{
-                                        fontSize: "12.5px",
-                                        fontWeight: 700,
-                                        minWidth: 26,
-                                        textAlign: "center",
-                                        color: item.stock === 0 ? DANGER : (item.stock === null || item.stock === "N/A") ? TEXT_DIM : OK,
-                                        cursor: typeof item.stock === "number" ? "pointer" : "default",
-                                        padding: "2px 6px",
-                                        borderRadius: "4px",
-                                        background: isLightMode ? "rgba(0,0,0,0.03)" : "rgba(255,255,255,0.05)",
-                                        border: "1px solid transparent",
-                                        transition: "all 0.15s",
-                                      }}
-                                      onMouseEnter={(e) => {
-                                        if (typeof item.stock === "number") {
-                                          e.currentTarget.style.border = `1px dashed ${ACCENT}`;
-                                          e.currentTarget.style.background = isLightMode ? "rgba(99, 102, 241, 0.08)" : "rgba(99, 102, 241, 0.15)";
-                                        }
-                                      }}
-                                      onMouseLeave={(e) => {
-                                        e.currentTarget.style.border = "1px solid transparent";
-                                        e.currentTarget.style.background = isLightMode ? "rgba(0,0,0,0.03)" : "rgba(255,255,255,0.05)";
-                                      }}
-                                    >
-                                      {item.stock === null || item.stock === "N/A" ? "N/A" : item.stock}
-                                    </span>
+                                    <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
+                                      {/* Stock count display */}
+                                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                        <div style={{ fontSize: "11.5px", color: TEXT_DIM }}>
+                                          현재고: <span className="mono" style={{ fontSize: "13px", fontWeight: 700, color: item.stock === 0 ? DANGER : OK }}>
+                                            {item.stock === null ? "N/A" : `${item.stock} 개`}
+                                          </span>
+                                        </div>
+                                        <span style={{ fontSize: "10px", color: TEXT_DIM }}>
+                                          최종수정: {item.updatedAt ? item.updatedAt.split(" ")[0] : "없음"}
+                                        </span>
+                                      </div>
+                                      {/* Borrow and Return buttons */}
+                                      <div style={{ display: "flex", gap: 6, width: "100%" }}>
+                                        <button
+                                          onClick={() => onRentItem?.(item, "대여")}
+                                          disabled={item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)}
+                                          style={{
+                                            flex: 1,
+                                            background: "rgba(99, 102, 241, 0.12)",
+                                            border: `1px solid ${ACCENT}`,
+                                            color: ACCENT,
+                                            borderRadius: "6px",
+                                            padding: "6px 8px",
+                                            fontSize: "11.5px",
+                                            fontWeight: 700,
+                                            cursor: (item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)) ? "not-allowed" : "pointer",
+                                            opacity: (item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)) ? 0.4 : 1,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            gap: 4,
+                                          }}
+                                        >
+                                          📦 대여하기
+                                        </button>
+                                        <button
+                                          onClick={() => onRentItem?.(item, "반납")}
+                                          style={{
+                                            flex: 1,
+                                            background: "rgba(16, 185, 129, 0.12)",
+                                            border: `1px solid ${OK}`,
+                                            color: OK,
+                                            borderRadius: "6px",
+                                            padding: "6px 8px",
+                                            fontSize: "11.5px",
+                                            fontWeight: 700,
+                                            cursor: "pointer",
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            gap: 4,
+                                          }}
+                                        >
+                                          🔄 반납하기
+                                        </button>
+                                      </div>
+                                    </div>
                                   )}
-                                  <button
-                                    onClick={() => onChangeStock(item, 1)}
-                                    disabled={typeof item.stock !== "number"}
-                                    style={{
-                                      ...stepBtnStyle,
-                                      opacity: typeof item.stock !== "number" ? 0.35 : 1,
-                                      cursor: typeof item.stock !== "number" ? "not-allowed" : "pointer",
-                                    }}
-                                  >
-                                    +
-                                  </button>
-                                </div>
-
-                                {/* Manager/Date and buttons */}
-                                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-                                    <span style={{ fontSize: "10px", color: TEXT_DIM }}>
-                                      {item.manager || "담당자 없음"}
-                                    </span>
-                                    <span style={{ fontSize: "9px", color: TEXT_DIM, marginTop: 1 }}>
-                                      {item.updatedAt ? item.updatedAt.split(" ")[0] : ""}
-                                    </span>
-                                  </div>
-                                  <div style={{ display: "flex", gap: 6 }}>
-                                    <button
-                                      onClick={() => onEditItem(item)}
-                                      title="수정"
-                                      style={{
-                                        background: "transparent",
-                                        border: "none",
-                                        color: TEXT_DIM,
-                                        cursor: "pointer",
-                                        padding: 2,
-                                      }}
-                                    >
-                                      <Edit3 size={12} />
-                                    </button>
-                                    <button
-                                      onClick={() => onDeleteItem(item.rowIndex)}
-                                      title="삭제"
-                                      style={{
-                                        background: "transparent",
-                                        border: "none",
-                                        color: DANGER,
-                                        cursor: "pointer",
-                                        padding: 2,
-                                      }}
-                                    >
-                                      <Trash2 size={12} />
-                                    </button>
-                                  </div>
                                 </div>
                               </div>
-                            ) : (
-                              <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
-                                {/* Stock count display */}
-                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                                  <div style={{ fontSize: "11.5px", color: TEXT_DIM }}>
-                                    현재고: <span className="mono" style={{ fontSize: "13px", fontWeight: 700, color: item.stock === 0 ? DANGER : OK }}>
-                                      {item.stock === null ? "N/A" : `${item.stock} 개`}
-                                    </span>
-                                  </div>
-                                  <span style={{ fontSize: "10px", color: TEXT_DIM }}>
-                                    최종수정: {item.updatedAt ? item.updatedAt.split(" ")[0] : "없음"}
-                                  </span>
-                                </div>
-                                {/* Borrow and Return buttons */}
-                                <div style={{ display: "flex", gap: 6, width: "100%" }}>
-                                  <button
-                                    onClick={() => onRentItem?.(item, "대여")}
-                                    disabled={item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)}
-                                    style={{
-                                      flex: 1,
-                                      background: "rgba(99, 102, 241, 0.12)",
-                                      border: `1px solid ${ACCENT}`,
-                                      color: ACCENT,
-                                      borderRadius: "6px",
-                                      padding: "6px 8px",
-                                      fontSize: "11.5px",
-                                      fontWeight: 700,
-                                      cursor: (item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)) ? "not-allowed" : "pointer",
-                                      opacity: (item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)) ? 0.4 : 1,
-                                      display: "flex",
-                                      alignItems: "center",
-                                      justifyContent: "center",
-                                      gap: 4,
-                                    }}
-                                  >
-                                    📦 대여하기
-                                  </button>
-                                  <button
-                                    onClick={() => onRentItem?.(item, "반납")}
-                                    style={{
-                                      flex: 1,
-                                      background: "rgba(16, 185, 129, 0.12)",
-                                      border: `1px solid ${OK}`,
-                                      color: OK,
-                                      borderRadius: "6px",
-                                      padding: "6px 8px",
-                                      fontSize: "11.5px",
-                                      fontWeight: 700,
-                                      cursor: "pointer",
-                                      display: "flex",
-                                      alignItems: "center",
-                                      justifyContent: "center",
-                                      gap: 4,
-                                    }}
-                                  >
-                                    🔄 반납하기
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                          </div>
+                            );
+                          })}
                         </div>
                       );
                     })}

@@ -47,7 +47,7 @@ export function getGoogleDriveImageUrl(url: string | undefined | null): string {
  * Parses location code (e.g. "A-01" -> { rack: "A", shelf: "01" })
  */
 export function parseLocation(loc: string | undefined | null) {
-  const trimmed = (loc || "").trim();
+  const trimmed = (loc || "").trim().toUpperCase();
   const parts = trimmed.split("-");
   if (parts.length < 2) return { rack: trimmed, shelf: null };
   return { rack: parts[0], shelf: parts.slice(1).join("-") };

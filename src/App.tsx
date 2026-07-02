@@ -214,6 +214,7 @@ export default function App() {
   const [pan, setPan] = useState({ x: 0, y: 0 });
 
   const [showAddForm, setShowAddForm] = useState(false);
+  const [defaultLocationForNewItem, setDefaultLocationForNewItem] = useState<string | null>(null);
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -803,13 +804,23 @@ export default function App() {
     inventory.forEach((it) => {
       const { rack } = parseLocation(it.location);
       if (rack !== selectedRack.id) return;
-      const loc = it.location.trim();
+      const loc = it.location.trim().toUpperCase();
       if (!map[loc]) map[loc] = [];
       map[loc].push(it);
     });
     return Object.keys(map)
-      .sort()
-      .map((loc) => ({ shelf: loc, items: map[loc] }));
+      .sort((a, b) => {
+        return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+      })
+      .map((loc) => {
+        // 같은 선반 내의 아이템들을 가나다 & ABC, 숫자 순으로 정렬
+        const sortedItems = [...map[loc]].sort((a, b) => {
+          const nameA = a.name || "";
+          const nameB = b.name || "";
+          return nameA.localeCompare(nameB, "ko", { sensitivity: "base", numeric: true });
+        });
+        return { shelf: loc, items: sortedItems };
+      });
   }, [selectedRack, inventory]);
 
   const totalStockByRack = useMemo(() => {
@@ -1103,13 +1114,6 @@ export default function App() {
     }, 600);
   }
 
-  // 권한 없는 사용자가 관리자 화면에 접근하는 것을 제한하는 보안 감시자
-  useEffect(() => {
-    if (["monitor", "defect", "rent"].includes(currentView) && !isAdmin) {
-      setCurrentView("login");
-    }
-  }, [currentView, isAdmin]);
-
   if (currentView === "landing") {
     return (
       <LandingPage
@@ -1153,6 +1157,13 @@ export default function App() {
           localStorage.setItem("wms_is_admin", "true");
           setCurrentView("monitor");
           showToast(`${user.name || user.id} 관리자님, 환영합니다!`, "ok");
+        }}
+        onViewOnlyMode={() => {
+          setIsAdmin(false);
+          localStorage.setItem("wms_is_admin", "false");
+          setCurrentUser(null);
+          setCurrentView("monitor");
+          showToast("열람용 모드(조회 전용)로 진입했습니다. 수정이 차단됩니다.", "ok");
         }}
         isLightMode={isLightMode}
         onSyncUsers={handleRefresh}
@@ -1524,11 +1535,59 @@ export default function App() {
           flexShrink: 0,
         }}
       >
-        {/* 현재 페이지 제목 */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {/* 현재 페이지 제목 및 권한 표시 배너 */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontSize: 16, fontWeight: 800, color: "var(--text-main, #f1f5f9)", letterSpacing: "-0.02em" }}>
             {currentView === "monitor" ? "📦 보관 구역 모니터링" : currentView === "rent" ? "📋 대여/반납 대장" : "⚠️ 불량로그 기록"}
           </span>
+          <span
+            style={{
+              fontSize: "11px",
+              fontWeight: 700,
+              padding: "4px 10px",
+              borderRadius: "12px",
+              background: isAdmin ? "rgba(16, 185, 129, 0.12)" : "rgba(99, 102, 241, 0.12)",
+              color: isAdmin ? "#10b981" : "#818cf8",
+              border: `1px solid ${isAdmin ? "rgba(16, 185, 129, 0.25)" : "rgba(99, 102, 241, 0.25)"}`,
+              display: "flex",
+              alignItems: "center",
+              gap: 4
+            }}
+          >
+            {isAdmin ? "🛠️ 관리자 모드" : "👀 열람용 모드"}
+          </span>
+          {!isAdmin && (
+            <button
+              onClick={() => {
+                setLoginId("");
+                setLoginPassword("");
+                setLoginError("");
+                setCurrentView("login");
+              }}
+              style={{
+                background: "rgba(99, 102, 241, 0.08)",
+                border: "1px solid rgba(99, 102, 241, 0.25)",
+                borderRadius: "6px",
+                padding: "3px 10px",
+                fontSize: "11px",
+                fontWeight: 700,
+                color: "#818cf8",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                transition: "all 0.2s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "rgba(99, 102, 241, 0.18)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "rgba(99, 102, 241, 0.08)";
+              }}
+            >
+              🔐 관리자 로그인
+            </button>
+          )}
         </div>
 
         {/* 품목 실시간 검색란 */}
@@ -1950,7 +2009,10 @@ export default function App() {
               onUpdateRack={(fields) => updateRackField(selectedRack!.id, fields)}
               onDeleteRack={() => deleteRack(selectedRack!.id)}
               onEditItem={(item) => setEditingItem(item)}
-              onAddItem={() => setShowAddForm(true)}
+              onAddItem={(loc) => {
+                setDefaultLocationForNewItem(loc || null);
+                setShowAddForm(true);
+              }}
               onDeleteItem={deleteInventoryItemRow}
               highlightShelf={
                 selectedRack && highlightShelf && parseLocation(highlightShelf).rack === selectedRack.id
@@ -1993,11 +2055,13 @@ export default function App() {
         <ItemFormModal
           item={editingItem}
           defaultRackId={selectedRack ? selectedRack.id : racks[0] ? racks[0].id : ""}
+          defaultLocation={defaultLocationForNewItem}
           racks={racks}
           onSave={saveInventoryItem}
           onClose={() => {
             setShowAddForm(false);
             setEditingItem(null);
+            setDefaultLocationForNewItem(null);
           }}
           defaultManager={currentUser ? (currentUser.name || currentUser.id) : "관리자"}
         />
