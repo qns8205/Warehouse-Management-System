@@ -19,7 +19,7 @@ export default function LoginPage({
   onSyncUsers,
   syncing,
 }: LoginPageProps) {
-  const [selectedMode, setSelectedMode] = useState<"view" | "admin">("view");
+  const [selectedMode, setSelectedMode] = useState<"view" | "admin">("admin");
   const [idInput, setIdInput] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
   const [localError, setLocalError] = useState("");
@@ -111,68 +111,62 @@ export default function LoginPage({
           style={{
             display: "grid",
             gridTemplateColumns: "1fr 1fr",
-            gap: "14px",
-            marginBottom: selectedMode === "admin" ? "28px" : "12px",
+            gap: "16px",
+            marginBottom: "28px",
           }}
         >
           {/* Left Choice Card: View-Only Mode */}
           <button
             type="button"
-            onClick={() => {
-              setSelectedMode("view");
-              // Immediately prompt view-only or let them click again?
-              // To make it extremely responsive and intuitive, let's keep it highlighted or offer immediate enter
-            }}
+            onClick={onViewOnlyMode}
             style={{
-              background: selectedMode === "view"
-                ? (isLightMode ? "rgba(99, 102, 241, 0.05)" : "rgba(99, 102, 241, 0.15)")
-                : "transparent",
-              border: `2px solid ${selectedMode === "view" ? ACCENT : BORDER_COLOR}`,
-              borderRadius: "16px",
-              padding: "24px 16px",
+              background: "transparent",
+              border: `2px solid ${BORDER_COLOR}`,
+              borderRadius: "20px",
+              padding: "32px 20px",
               cursor: "pointer",
               textAlign: "center",
               display: "flex",
               flexDirection: "column",
               alignItems: "center",
-              gap: "12px",
+              gap: "14px",
               transition: "all 0.2s ease-in-out",
-              boxShadow: selectedMode === "view" ? `0 4px 20px ${isLightMode ? "rgba(99, 102, 241, 0.15)" : "rgba(99, 102, 241, 0.3)"}` : "none",
             }}
             onMouseEnter={(e) => {
-              if (selectedMode !== "view") {
-                e.currentTarget.style.borderColor = ACCENT;
-                e.currentTarget.style.background = isLightMode ? "rgba(99, 102, 241, 0.02)" : "rgba(255, 255, 255, 0.03)";
-              }
+              e.currentTarget.style.borderColor = "#10b981";
+              e.currentTarget.style.background = isLightMode ? "rgba(16, 185, 129, 0.04)" : "rgba(16, 185, 129, 0.08)";
+              e.currentTarget.style.transform = "translateY(-2px)";
+              e.currentTarget.style.boxShadow = "0 10px 25px rgba(16, 185, 129, 0.15)";
             }}
             onMouseLeave={(e) => {
-              if (selectedMode !== "view") {
-                e.currentTarget.style.borderColor = BORDER_COLOR;
-                e.currentTarget.style.background = "transparent";
-              }
+              e.currentTarget.style.borderColor = BORDER_COLOR;
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.transform = "none";
+              e.currentTarget.style.boxShadow = "none";
             }}
           >
             <div
               style={{
-                width: "44px",
-                height: "44px",
+                width: "56px",
+                height: "56px",
                 borderRadius: "50%",
-                background: selectedMode === "view" ? ACCENT : (isLightMode ? "#e2e8f0" : "#334155"),
-                color: selectedMode === "view" ? "#ffffff" : TEXT_DIM,
+                background: "rgba(16, 185, 129, 0.12)",
+                color: "#10b981",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 transition: "all 0.2s",
               }}
             >
-              <Eye size={22} />
+              <Eye size={28} />
             </div>
             <div>
-              <div style={{ fontSize: "14.5px", fontWeight: 800, color: TEXT_MAIN, marginBottom: "4px" }}>
+              <div style={{ fontSize: "16px", fontWeight: 800, color: TEXT_MAIN, marginBottom: "4px" }}>
                 열람용 모드
               </div>
-              <div style={{ fontSize: "11px", color: TEXT_DIM, lineHeight: "1.4" }}>
-                실시간 현황 조회 전용<br />(수정/대여 불가)
+              <div style={{ fontSize: "11.5px", color: TEXT_DIM, lineHeight: "1.4" }}>
+                실시간 현황 조회 전용<br />
+                <span style={{ color: "#10b981", fontWeight: 600 }}>[즉시 진입하기]</span>
               </div>
             </div>
           </button>
@@ -189,16 +183,16 @@ export default function LoginPage({
                 ? (isLightMode ? "rgba(99, 102, 241, 0.05)" : "rgba(99, 102, 241, 0.15)")
                 : "transparent",
               border: `2px solid ${selectedMode === "admin" ? ACCENT : BORDER_COLOR}`,
-              borderRadius: "16px",
-              padding: "24px 16px",
+              borderRadius: "20px",
+              padding: "32px 20px",
               cursor: "pointer",
               textAlign: "center",
               display: "flex",
               flexDirection: "column",
               alignItems: "center",
-              gap: "12px",
+              gap: "14px",
               transition: "all 0.2s ease-in-out",
-              boxShadow: selectedMode === "admin" ? `0 4px 20px ${isLightMode ? "rgba(99, 102, 241, 0.15)" : "rgba(99, 102, 241, 0.3)"}` : "none",
+              boxShadow: selectedMode === "admin" ? `0 10px 25px ${isLightMode ? "rgba(99, 102, 241, 0.15)" : "rgba(99, 102, 241, 0.3)"}` : "none",
             }}
             onMouseEnter={(e) => {
               if (selectedMode !== "admin") {
@@ -215,8 +209,8 @@ export default function LoginPage({
           >
             <div
               style={{
-                width: "44px",
-                height: "44px",
+                width: "56px",
+                height: "56px",
                 borderRadius: "50%",
                 background: selectedMode === "admin" ? ACCENT : (isLightMode ? "#e2e8f0" : "#334155"),
                 color: selectedMode === "admin" ? "#ffffff" : TEXT_DIM,
@@ -226,58 +220,22 @@ export default function LoginPage({
                 transition: "all 0.2s",
               }}
             >
-              <ShieldAlert size={20} />
+              <ShieldAlert size={26} />
             </div>
             <div>
-              <div style={{ fontSize: "14.5px", fontWeight: 800, color: TEXT_MAIN, marginBottom: "4px" }}>
+              <div style={{ fontSize: "16px", fontWeight: 800, color: TEXT_MAIN, marginBottom: "4px" }}>
                 관리자 모드
               </div>
-              <div style={{ fontSize: "11px", color: TEXT_DIM, lineHeight: "1.4" }}>
-                재고 정보 수정 및 등록<br />대여/반납 전용 기능
+              <div style={{ fontSize: "11.5px", color: TEXT_DIM, lineHeight: "1.4" }}>
+                재고 정보 수정 및 등록<br />
+                <span style={{ color: ACCENT, fontWeight: 600 }}>[로그인 필요]</span>
               </div>
             </div>
           </button>
         </div>
 
         {/* Dynamic Panel based on selection */}
-        {selectedMode === "view" ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginTop: "16px" }}>
-            <button
-              type="button"
-              onClick={onViewOnlyMode}
-              style={{
-                width: "100%",
-                background: ACCENT,
-                color: "#ffffff",
-                border: "none",
-                borderRadius: "12px",
-                padding: "15px 12px",
-                fontSize: "14.5px",
-                fontWeight: 800,
-                cursor: "pointer",
-                transition: "all 0.2s",
-                boxShadow: "0 6px 18px rgba(99, 102, 241, 0.3)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: "8px",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = "#4f46e5";
-                e.currentTarget.style.transform = "translateY(-1px)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = ACCENT;
-                e.currentTarget.style.transform = "none";
-              }}
-            >
-              👀 열람용 모드로 즉시 진입하기
-            </button>
-            <p style={{ fontSize: "11.5px", color: TEXT_DIM, textAlign: "center", marginTop: "6px" }}>
-              * 별도의 로그인 없이 실시간 보관구역 상태와 수량을 조회할 수 있습니다.
-            </p>
-          </div>
-        ) : (
+        {selectedMode === "admin" && (
           <form onSubmit={handleLoginSubmit} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
             {/* ID Input */}
             <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>

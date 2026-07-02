@@ -6,6 +6,7 @@ interface ItemFormModalProps {
   item: InventoryItem | null;
   defaultRackId: string;
   defaultLocation?: string | null;
+  defaultSpec?: string | null;
   racks: Rack[];
   onSave: (item: any) => void;
   onClose: () => void;
@@ -23,6 +24,7 @@ export default function ItemFormModal({
   item,
   defaultRackId,
   defaultLocation,
+  defaultSpec,
   racks,
   onSave,
   onClose,
@@ -32,9 +34,12 @@ export default function ItemFormModal({
   const initialRack = item 
     ? parseLocation(item.location).rack 
     : (parsedLoc ? parsedLoc.rack : defaultRackId || (racks[0] && racks[0].id) || "");
-  const initialShelfNum = item 
-    ? parseLocation(item.location).shelf 
+  const initialShelfPick = item
+    ? item.location
     : (defaultLocation || "");
+  const initialNewShelfNum = item 
+    ? parseLocation(item.location).shelf 
+    : (parsedLoc ? parsedLoc.shelf : "");
 
   const [form, setForm] = useState<Omit<InventoryItem, "rowIndex"> & { rowIndex?: number }>(
     item
@@ -48,14 +53,14 @@ export default function ItemFormModal({
           updatedAt: "",
           manager: defaultManager || "관리자",
           note: "",
-          spec: "",
+          spec: defaultSpec || "",
         }
   );
 
   const [rackId, setRackId] = useState(initialRack);
   const [shelfMode, setShelfMode] = useState<"existing" | "new">("existing");
-  const [shelfPick, setShelfPick] = useState(initialShelfNum || "");
-  const [newShelfNum, setNewShelfNum] = useState("");
+  const [shelfPick, setShelfPick] = useState(initialShelfPick);
+  const [newShelfNum, setNewShelfNum] = useState(initialNewShelfNum);
 
   const currentRack = racks.find((r) => r.id === rackId);
   const existingShelves = currentRack && currentRack.shelves ? currentRack.shelves : [];

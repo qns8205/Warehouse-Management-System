@@ -259,7 +259,7 @@ function getInventoryData(sheet) {
       updatedAt: displayValues[i][5] || "",
       manager: String(row[6] || "").trim(),
       note: String(row[7] || "").trim(),
-      spec: "" // Column I가 사진 링크용이 되었으므로 규격 데이터는 비워둡니다.
+      spec: String(row[1] || "").trim() // Column B (서브 분류)
     });
   }
   return inventory;
@@ -365,7 +365,7 @@ function addInventoryItem(sheet, item) {
 
   const rowValues = [
     item.location || "",
-    "", // Column B (B열은 참고하지 않으므로 비워둡니다)
+    item.spec || "", // Column B (서브 분류)
     item.name || "",
     item.link || "",
     rawStock,
@@ -388,6 +388,7 @@ function updateInventoryItem(sheet, item) {
   const currentValues = range.getValues()[0];
   
   if (item.location !== undefined) currentValues[0] = item.location;
+  if (item.spec !== undefined) currentValues[1] = item.spec; // Column B (서브 분류)
   if (item.photo !== undefined) {
     currentValues[8] = item.photo; // Column I (사진 링크용)만 업데이트합니다.
   }

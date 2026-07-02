@@ -215,6 +215,7 @@ export default function App() {
 
   const [showAddForm, setShowAddForm] = useState(false);
   const [defaultLocationForNewItem, setDefaultLocationForNewItem] = useState<string | null>(null);
+  const [defaultSpecForNewItem, setDefaultSpecForNewItem] = useState<string | null>(null);
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -936,6 +937,22 @@ export default function App() {
       // 데모 모드일 때는 즉시 완료
       showToast(isNew ? "로컬 데모 모드에 등록되었습니다." : "로컬 데모 모드에 저장되었습니다.", "ok");
     }
+  }
+
+  async function handleAddSubcategory(shelf: string, spec: string) {
+    const newItem: Omit<InventoryItem, "rowIndex"> = {
+      location: shelf,
+      spec: spec,
+      name: "새 품목",
+      link: "N/A",
+      stock: 0,
+      photo: "",
+      manager: currentUser ? (currentUser.name || currentUser.id) : "관리자",
+      note: "서브 분류 생성을 위해 자동 등록된 임시 품목입니다.",
+      updatedAt: formatTimestampLocal(),
+    };
+    await saveInventoryItem(newItem);
+    showToast(`선반 [${shelf}] 에 [${spec}] 서브 분류가 생성되었습니다.`, "ok");
   }
 
   async function deleteInventoryItemRow(rowIndex: number) {
@@ -2009,10 +2026,12 @@ export default function App() {
               onUpdateRack={(fields) => updateRackField(selectedRack!.id, fields)}
               onDeleteRack={() => deleteRack(selectedRack!.id)}
               onEditItem={(item) => setEditingItem(item)}
-              onAddItem={(loc) => {
+              onAddItem={(loc, spec) => {
                 setDefaultLocationForNewItem(loc || null);
+                setDefaultSpecForNewItem(spec || null);
                 setShowAddForm(true);
               }}
+              onAddSubcategory={handleAddSubcategory}
               onDeleteItem={deleteInventoryItemRow}
               highlightShelf={
                 selectedRack && highlightShelf && parseLocation(highlightShelf).rack === selectedRack.id
@@ -2056,12 +2075,14 @@ export default function App() {
           item={editingItem}
           defaultRackId={selectedRack ? selectedRack.id : racks[0] ? racks[0].id : ""}
           defaultLocation={defaultLocationForNewItem}
+          defaultSpec={defaultSpecForNewItem}
           racks={racks}
           onSave={saveInventoryItem}
           onClose={() => {
             setShowAddForm(false);
             setEditingItem(null);
             setDefaultLocationForNewItem(null);
+            setDefaultSpecForNewItem(null);
           }}
           defaultManager={currentUser ? (currentUser.name || currentUser.id) : "관리자"}
         />

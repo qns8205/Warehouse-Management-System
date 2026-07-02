@@ -10,7 +10,8 @@ interface SidePanelProps {
   onUpdateRack: (fields: Partial<Rack>) => void;
   onDeleteRack: () => void;
   onEditItem: (item: InventoryItem) => void;
-  onAddItem: (defaultLocation?: string) => void;
+  onAddItem: (defaultLocation?: string, defaultSpec?: string) => void;
+  onAddSubcategory: (shelf: string, spec: string) => void;
   onDeleteItem: (rowIndex: number) => void;
   highlightShelf: string | null;
   highlightedItemRowIndex?: number | null;
@@ -39,6 +40,7 @@ export default function SidePanel({
   onDeleteRack,
   onEditItem,
   onAddItem,
+  onAddSubcategory,
   onDeleteItem,
   highlightShelf,
   highlightedItemRowIndex = null,
@@ -57,6 +59,17 @@ export default function SidePanel({
   const [editingStockValue, setEditingStockValue] = useState<string>("");
 
   const [lastActiveShelf, setLastActiveShelf] = useState<string | null>(null);
+
+  const [activeSubcategoryShelf, setActiveSubcategoryShelf] = useState<string | null>(null);
+  const [newSubcategoryName, setNewSubcategoryName] = useState("");
+
+  const handleCreateSubcategory = () => {
+    const subName = newSubcategoryName.trim();
+    if (!subName || !activeSubcategoryShelf) return;
+    onAddSubcategory(activeSubcategoryShelf, subName);
+    setActiveSubcategoryShelf(null);
+    setNewSubcategoryName("");
+  };
 
   const handleSaveStockInline = (item: InventoryItem) => {
     setEditingStockItemRowIndex(null);
@@ -418,7 +431,8 @@ export default function SidePanel({
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        onAddItem(shelf);
+                        setActiveSubcategoryShelf(shelf);
+                        setNewSubcategoryName("");
                       }}
                       style={{
                         background: isLightMode ? "#e2e8f0" : "rgba(255, 255, 255, 0.06)",
@@ -433,7 +447,7 @@ export default function SidePanel({
                         justifyContent: "center",
                         flexShrink: 0,
                       }}
-                      title={`${shelf} 선반에 바로 신규 등록`}
+                      title={`${shelf} 선반 내 서브 분류 생성`}
                     >
                       <Plus size={16} />
                     </button>
@@ -465,6 +479,26 @@ export default function SidePanel({
                             </span>
                             <div style={{ flex: 1, height: "1px", background: PANEL_BORDER, opacity: 0.5 }} />
                             <span style={{ fontSize: "10.5px", color: TEXT_DIM, marginRight: 2 }}>{subItems.length}개</span>
+                            {isAdmin && (
+                              <button
+                                onClick={() => onAddItem(shelf, subName === "기타" ? "" : subName)}
+                                style={{
+                                  background: "transparent",
+                                  border: "none",
+                                  color: ACCENT,
+                                  cursor: "pointer",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  padding: "4px",
+                                  borderRadius: "4px",
+                                  transition: "all 0.2s",
+                                }}
+                                title={`${shelf} 선반의 [${subName}] 서브 분류에 새 품목 등록`}
+                              >
+                                <Plus size={14} />
+                              </button>
+                            )}
                           </div>
 
                           {/* Items belonging to this subcategory */}
@@ -952,6 +986,111 @@ export default function SidePanel({
             }}
           >
             {zoomImageName}
+          </div>
+        </div>
+      )}
+
+      {/* ===== 📂 서브 분류 생성 모달 ===== */}
+      {activeSubcategoryShelf && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(10, 10, 11, 0.8)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+            backdropFilter: "blur(4px)",
+          }}
+          onPointerDown={(e) => {
+            if (e.target === e.currentTarget) {
+              setActiveSubcategoryShelf(null);
+              setNewSubcategoryName("");
+            }
+          }}
+        >
+          <div
+            style={{
+              width: 360,
+              background: PANEL,
+              border: `1px solid ${PANEL_BORDER}`,
+              borderRadius: 12,
+              padding: 24,
+              boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
+            }}
+          >
+            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 14, color: TEXT_MAIN }}>
+              📂 [{activeSubcategoryShelf}] 선반 서브 분류 추가
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div>
+                <label style={{ fontSize: "11px", fontWeight: 600, color: TEXT_DIM, display: "block", marginBottom: 6 }}>
+                  새 서브 분류명 (예: 공구류, M2 규격, M3 규격 등)
+                </label>
+                <input
+                  type="text"
+                  placeholder="분류명을 입력하세요..."
+                  value={newSubcategoryName}
+                  onChange={(e) => setNewSubcategoryName(e.target.value)}
+                  style={{
+                    width: "100%",
+                    background: "var(--input-bg, #0f172a)",
+                    color: TEXT_MAIN,
+                    border: `1px solid ${PANEL_BORDER}`,
+                    borderRadius: "6px",
+                    padding: "10px 14px",
+                    fontSize: "13px",
+                    outline: "none",
+                  }}
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && newSubcategoryName.trim()) {
+                      handleCreateSubcategory();
+                    }
+                  }}
+                />
+              </div>
+              <div style={{ fontSize: "11px", color: TEXT_DIM, lineHeight: "1.4" }}>
+                * 서브 분류를 생성하면 해당 분류의 임시 품목이 해당 선반에 자동 등록됩니다. 이후 간편하게 편집해 사용하세요!
+              </div>
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+                <button
+                  onClick={() => {
+                    setActiveSubcategoryShelf(null);
+                    setNewSubcategoryName("");
+                  }}
+                  style={{
+                    background: "transparent",
+                    border: `1px solid ${PANEL_BORDER}`,
+                    color: TEXT_DIM,
+                    padding: "8px 14px",
+                    borderRadius: 6,
+                    fontSize: 12.5,
+                    cursor: "pointer",
+                  }}
+                >
+                  취소
+                </button>
+                <button
+                  onClick={handleCreateSubcategory}
+                  disabled={!newSubcategoryName.trim()}
+                  style={{
+                    background: ACCENT,
+                    color: "#ffffff",
+                    border: "none",
+                    padding: "8px 16px",
+                    borderRadius: 6,
+                    fontSize: 12.5,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    opacity: newSubcategoryName.trim() ? 1 : 0.5,
+                  }}
+                >
+                  생성
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
