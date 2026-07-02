@@ -939,20 +939,100 @@ export default function App() {
     }
   }
 
-  async function handleAddSubcategory(shelf: string, spec: string) {
-    const newItem: Omit<InventoryItem, "rowIndex"> = {
-      location: shelf,
-      spec: spec,
-      name: "새 품목",
-      link: "N/A",
-      stock: 0,
-      photo: "",
-      manager: currentUser ? (currentUser.name || currentUser.id) : "관리자",
-      note: "서브 분류 생성을 위해 자동 등록된 임시 품목입니다.",
+  async function handleAddSubcategory(shelf: string, spec: string, selectedRowIndexes?: number[]) {
+    if (selectedRowIndexes && selectedRowIndexes.length > 0) {
+      const itemsToUpdate = inventory.filter((item) => selectedRowIndexes.includes(item.rowIndex));
+      const updatedItems = itemsToUpdate.map((item) => ({
+        ...item,
+        spec: spec,
+        updatedAt: formatTimestampLocal(),
+      }));
+
+      // Update locally
+      setInventory((prev) =>
+        prev.map((item) => {
+          if (selectedRowIndexes.includes(item.rowIndex)) {
+            return { ...item, spec: spec, updatedAt: formatTimestampLocal() };
+          }
+          return item;
+        })
+      );
+
+      showToast(`선택한 ${selectedRowIndexes.length}개 물품의 서브 분류가 [${spec}]으로 변경되었습니다.`, "info");
+
+      if (connected) {
+        setSaving(true);
+        callScript("updateMultipleInventoryItems", { items: updatedItems })
+          .then(async () => {
+            const data = await fetchAll();
+            setInventory(mergePendingStocks(data.inventory || []));
+            setLastSync(new Date());
+            showToast("✅ 구글 스프레드시트 일괄 업데이트 완료", "ok");
+          })
+          .catch((err: any) => {
+            console.error("일괄 업데이트 에러:", err);
+            showToast("⚠️ 실시간 스프레드시트 동기화 지연: " + err.message + " (로컬 캐시는 저장됨)", "warn");
+          })
+          .finally(() => {
+            setSaving(false);
+          });
+      }
+    } else {
+      const newItem: Omit<InventoryItem, "rowIndex"> = {
+        location: shelf,
+        spec: spec,
+        name: "새 품목",
+        link: "N/A",
+        stock: 0,
+        photo: "",
+        manager: currentUser ? (currentUser.name || currentUser.id) : "관리자",
+        note: "서브 분류 생성을 위해 자동 등록된 임시 품목입니다.",
+        updatedAt: formatTimestampLocal(),
+      };
+      await saveInventoryItem(newItem);
+      showToast(`선반 [${shelf}] 에 [${spec}] 서브 분류가 생성되었습니다.`, "ok");
+    }
+  }
+
+  async function handleRenameSubcategory(shelf: string, oldSubName: string, newSubName: string) {
+    const itemsToUpdate = inventory.filter((item) => item.location === shelf && item.spec === oldSubName);
+    if (itemsToUpdate.length === 0) return;
+
+    const updatedItems = itemsToUpdate.map((item) => ({
+      ...item,
+      spec: newSubName,
       updatedAt: formatTimestampLocal(),
-    };
-    await saveInventoryItem(newItem);
-    showToast(`선반 [${shelf}] 에 [${spec}] 서브 분류가 생성되었습니다.`, "ok");
+    }));
+
+    // Update locally
+    setInventory((prev) =>
+      prev.map((item) => {
+        if (item.location === shelf && item.spec === oldSubName) {
+          return { ...item, spec: newSubName, updatedAt: formatTimestampLocal() };
+        }
+        return item;
+      })
+    );
+
+    showToast(`서브 분류명이 [${oldSubName}]에서 [${newSubName}]으로 변경되었습니다.`, "info");
+
+    if (connected) {
+      setSaving(true);
+      callScript("updateMultipleInventoryItems", { items: updatedItems })
+        .then(async () => {
+          const data = await fetchAll();
+          setInventory(mergePendingStocks(data.inventory || []));
+          setLastSync(new Date());
+          showToast("✅ 구글 스프레드시트 이름 수정 완료", "ok");
+        })
+        .catch((err: any) => {
+          console.error("이름 수정 에러:", err);
+          showToast("⚠️ 실시간 스프레드시트 동기화 지연: " + err.message + " (로컬 캐시는 저장됨)", "warn");
+        })
+        .finally(() => {
+          setSaving(false);
+        });
+    }
   }
 
   async function deleteInventoryItemRow(rowIndex: number) {
@@ -2032,6 +2112,7 @@ export default function App() {
                 setShowAddForm(true);
               }}
               onAddSubcategory={handleAddSubcategory}
+              onRenameSubcategory={handleRenameSubcategory}
               onDeleteItem={deleteInventoryItemRow}
               highlightShelf={
                 selectedRack && highlightShelf && parseLocation(highlightShelf).rack === selectedRack.id
@@ -2085,6 +2166,7 @@ export default function App() {
             setDefaultSpecForNewItem(null);
           }}
           defaultManager={currentUser ? (currentUser.name || currentUser.id) : "관리자"}
+          inventory={inventory}
         />
       )}
 
