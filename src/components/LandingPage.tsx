@@ -611,7 +611,7 @@ function getDefectLogs(sheet) {
     const row = values[i];
     logs.push({
       rowIndex: i + 2,
-      timestamp: displayValues[i][2] || "",
+      timestamp: row[2] instanceof Date ? formatDate(row[2]) : (row[2] ? String(row[2]).trim() : (displayValues[i][2] || "")),
       location: "",
       name: String(row[0] || "").trim(),
       qty: row[1] === "" ? null : Number(row[1]),

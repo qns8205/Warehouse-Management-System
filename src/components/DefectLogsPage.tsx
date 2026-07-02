@@ -2,6 +2,8 @@ import React, { useState, useMemo } from "react";
 import { InventoryItem, DefectLog } from "../types";
 import { AlertTriangle, Calendar, User, MapPin, Clipboard, Plus, Search, ArrowLeft, FileText, Check } from "lucide-react";
 
+import { isFuzzyMatch } from "../utils/drive";
+
 interface DefectLogsPageProps {
   defectLogs: DefectLog[];
   inventory: InventoryItem[];
@@ -86,11 +88,10 @@ export default function DefectLogsPage({
   }, [inventory]);
 
   const filteredUniqueItems = useMemo(() => {
-    const q = itemSearchQuery.toLowerCase().trim();
-    if (!q) return uniqueItems;
+    if (!itemSearchQuery.trim()) return uniqueItems;
     return uniqueItems.filter((item) =>
-      item.name.toLowerCase().includes(q) ||
-      item.location.toLowerCase().includes(q)
+      isFuzzyMatch(item.name || "", itemSearchQuery) ||
+      isFuzzyMatch(item.location || "", itemSearchQuery)
     );
   }, [uniqueItems, itemSearchQuery]);
 
@@ -158,14 +159,13 @@ export default function DefectLogsPage({
   const filteredLogs = useMemo(() => {
     return defectLogs
       .filter((log) => {
-        const query = filterQuery.toLowerCase().trim();
         const matchesQuery =
-          !query ||
-          log.name.toLowerCase().includes(query) ||
-          log.location.toLowerCase().includes(query) ||
-          log.manager.toLowerCase().includes(query) ||
-          log.note.toLowerCase().includes(query) ||
-          (log.actionTaken && log.actionTaken.toLowerCase().includes(query));
+          !filterQuery.trim() ||
+          isFuzzyMatch(log.name || "", filterQuery) ||
+          isFuzzyMatch(log.location || "", filterQuery) ||
+          isFuzzyMatch(log.manager || "", filterQuery) ||
+          isFuzzyMatch(log.note || "", filterQuery) ||
+          (log.actionTaken && isFuzzyMatch(log.actionTaken, filterQuery));
 
         const matchesType = filterType === "전체" || log.defectType === filterType;
 

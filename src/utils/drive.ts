@@ -124,3 +124,65 @@ export function autoLayoutRacks(inventory: InventoryItem[], existingRacks: Rack[
   });
   return racks;
 }
+
+export function getApproximateSubstringDistance(text: string, query: string): number {
+  const m = query.length;
+  const n = text.length;
+  if (m === 0) return 0;
+  if (n === 0) return m;
+
+  let dp = Array(m + 1).fill(0);
+  for (let i = 0; i <= m; i++) {
+    dp[i] = i;
+  }
+
+  for (let j = 1; j <= n; j++) {
+    const nextDp = Array(m + 1).fill(0);
+    nextDp[0] = 0; 
+    for (let i = 1; i <= m; i++) {
+      const cost = query[i - 1] === text[j - 1] ? 0 : 1;
+      nextDp[i] = Math.min(
+        dp[i] + 1,          // deletion from text
+        nextDp[i - 1] + 1,   // insertion into text
+        dp[i - 1] + cost    // substitution
+      );
+    }
+    dp = nextDp;
+  }
+
+  return dp[m];
+}
+
+export function isFuzzyMatch(text: string, query: string): boolean {
+  if (!query) return true;
+  if (!text) return false;
+
+  const cleanText = text.replace(/\s+/g, "").toLowerCase();
+  const cleanQuery = query.replace(/\s+/g, "").toLowerCase();
+
+  // 1. Check exact full substring match first
+  if (cleanText.includes(cleanQuery)) {
+    return true;
+  }
+
+  // 2. Split query into terms to support out-of-order matching or multiple conditions
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length > 1) {
+    // Every term must be fuzzy matched in the text
+    return terms.every(term => {
+      const cleanTerm = term.replace(/\s+/g, "");
+      if (!cleanTerm) return true;
+      const tLen = cleanTerm.length;
+      if (cleanText.includes(cleanTerm)) return true;
+      if (tLen < 2) return false; // short queries require exact match
+      const maxDist = tLen <= 4 ? 1 : 2;
+      return getApproximateSubstringDistance(cleanText, cleanTerm) <= maxDist;
+    });
+  }
+
+  // 3. Single term fuzzy match
+  const qLen = cleanQuery.length;
+  if (qLen < 2) return false; // Too short for typo tolerance
+  const maxDistance = qLen <= 4 ? 1 : 2;
+  return getApproximateSubstringDistance(cleanText, cleanQuery) <= maxDistance;
+}

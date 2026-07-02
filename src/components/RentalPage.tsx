@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import { InventoryItem, RentLog } from "../types";
 import { ArrowLeft, Search, Check, ChevronDown, Package, User, Calendar, FileText, Image as ImageIcon } from "lucide-react";
-import { formatTimestampLocal, getGoogleDriveImageUrl } from "../utils/drive";
+import { formatTimestampLocal, getGoogleDriveImageUrl, isFuzzyMatch } from "../utils/drive";
 
 interface RentalPageProps {
   inventory: InventoryItem[];
@@ -65,13 +65,12 @@ export default function RentalPage({
 
   // 검색 쿼리에 따라 물품 필터링
   const filteredItems = useMemo(() => {
-    const q = searchQuery.toLowerCase().trim();
-    if (!q) return inventory;
+    if (!searchQuery.trim()) return inventory;
     return inventory.filter(
       (item) =>
-        item.name.toLowerCase().includes(q) ||
-        item.location.toLowerCase().includes(q) ||
-        (item.spec && item.spec.toLowerCase().includes(q))
+        isFuzzyMatch(item.name || "", searchQuery) ||
+        isFuzzyMatch(item.location || "", searchQuery) ||
+        (item.spec && isFuzzyMatch(item.spec, searchQuery))
     );
   }, [inventory, searchQuery]);
 

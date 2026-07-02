@@ -17,6 +17,8 @@ import {
   AlertCircle 
 } from "lucide-react";
 
+import { isFuzzyMatch } from "../utils/drive";
+
 interface RentLogsPageProps {
   rentLogs: RentLog[];
   inventory: InventoryItem[];
@@ -171,12 +173,11 @@ export default function RentLogsPage({
 
   // Filter inventory for dropdown autocomplete
   const filteredInventoryItems = useMemo(() => {
-    const q = searchQuery.toLowerCase().trim();
-    if (!q) return inventory;
+    if (!searchQuery.trim()) return inventory;
     return inventory.filter(
       (item) =>
-        item.name.toLowerCase().includes(q) ||
-        item.location.toLowerCase().includes(q)
+        isFuzzyMatch(item.name || "", searchQuery) ||
+        isFuzzyMatch(item.location || "", searchQuery)
     );
   }, [inventory, searchQuery]);
 
@@ -300,11 +301,11 @@ export default function RentLogsPage({
   const filteredLogs = useMemo(() => {
     const filtered = rentLogs.filter((log) => {
       const matchesQuery =
-        !filterQuery ||
-        log.name.toLowerCase().includes(filterQuery.toLowerCase()) ||
-        log.user.toLowerCase().includes(filterQuery.toLowerCase()) ||
-        (log.location && log.location.toLowerCase().includes(filterQuery.toLowerCase())) ||
-        (log.note && log.note.toLowerCase().includes(filterQuery.toLowerCase()));
+        !filterQuery.trim() ||
+        isFuzzyMatch(log.name || "", filterQuery) ||
+        isFuzzyMatch(log.user || "", filterQuery) ||
+        (log.location && isFuzzyMatch(log.location, filterQuery)) ||
+        (log.note && isFuzzyMatch(log.note, filterQuery));
 
       const matchesType = filterType === "전체" || log.type === filterType;
 
