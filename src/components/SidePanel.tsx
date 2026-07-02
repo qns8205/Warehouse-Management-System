@@ -123,7 +123,7 @@ export default function SidePanel({
     return (
       <aside
         style={{
-          width: 350,
+          width: 420,
           background: PANEL,
           borderLeft: `1px solid ${PANEL_BORDER}`,
           padding: 24,
@@ -161,7 +161,7 @@ export default function SidePanel({
   return (
     <aside
       style={{
-        width: 350,
+        width: 420,
         background: PANEL,
         borderLeft: `1px solid ${PANEL_BORDER}`,
         flexShrink: 0,

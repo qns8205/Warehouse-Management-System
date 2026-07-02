@@ -24,6 +24,7 @@ import {
   Grid,
   MapPin,
   ChevronRight,
+  ChevronLeft,
   Package,
   Sun,
   Moon,
@@ -31,6 +32,8 @@ import {
   QrCode,
   Smartphone,
   ArrowLeft,
+  ClipboardList,
+  AlertTriangle,
 } from "lucide-react";
 
 const DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxt86U_xFleI59RbVu-7RMa-zQOgs2J-pLHZQ_acZkQoEdFo9tTOvNv4v9uSWMhZndFgA/exec";
@@ -222,6 +225,7 @@ export default function App() {
   const [newRackName, setNewRackName] = useState("");
 
   const [displayMode, setDisplayMode] = useState<"grid" | "canvas">("grid");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   // 2. Refs
   const pendingUpdates = useRef<{ [rowIndex: number]: { stock: number; expiry: number } }>({});
@@ -1184,7 +1188,7 @@ export default function App() {
         color: "var(--text-main, #f1f5f9)",
         fontFamily: "'Inter', sans-serif",
         display: "flex",
-        flexDirection: "column",
+        flexDirection: "row",
         overflow: "hidden",
       }}
     >
@@ -1224,7 +1228,289 @@ export default function App() {
         }
       `}</style>
 
-      {/* ===== 1. 상단 바 ===== */}
+      {/* ===== 1. 좌측 사이드바 ===== */}
+      <aside
+        style={{
+          width: sidebarCollapsed ? 72 : 260,
+          background: "var(--header-bg, #1e293b)",
+          borderRight: "1px solid var(--panel-border, #334155)",
+          display: "flex",
+          flexDirection: "column",
+          height: "100vh",
+          flexShrink: 0,
+          zIndex: 110,
+          transition: "width 0.2s ease",
+        }}
+      >
+        {/* 상단 로고 영역 */}
+        {sidebarCollapsed ? (
+          <div
+            style={{
+              height: 64,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              borderBottom: "1px solid var(--panel-border, #334155)",
+            }}
+          >
+            <button
+              onClick={() => setSidebarCollapsed(false)}
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: 8,
+                background: "transparent",
+                color: "var(--text-main, #f1f5f9)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+              }}
+              title="사이드바 펼치기"
+            >
+              <ChevronRight size={20} />
+            </button>
+          </div>
+        ) : (
+          <div
+            style={{
+              height: 64,
+              padding: "0 16px 0 20px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              borderBottom: "1px solid var(--panel-border, #334155)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div
+                className="mono"
+                style={{
+                  fontWeight: 900,
+                  fontSize: 16,
+                  color: "#ffffff",
+                  letterSpacing: "0.05em",
+                  background: "#4f46e5",
+                  padding: "6px 12px",
+                  borderRadius: 4,
+                  boxShadow: "0 2px 4px rgba(0,0,0,0.2)",
+                }}
+              >
+                LOGISTIX™
+              </div>
+              <div style={{ fontWeight: 800, fontSize: 15, color: "var(--text-main, #f8fafc)", letterSpacing: "-0.01em" }}>
+                WMS PRO
+              </div>
+            </div>
+            <button
+              onClick={() => setSidebarCollapsed(true)}
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: 6,
+                background: "transparent",
+                color: "var(--text-dim, #94a3b8)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+              }}
+              title="사이드바 접기"
+            >
+              <ChevronLeft size={18} />
+            </button>
+          </div>
+        )}
+
+        {/* 사용자 정보 영역 */}
+        {currentUser && (
+          sidebarCollapsed ? (
+            <div
+              style={{
+                padding: "16px 0",
+                borderBottom: "1px solid var(--panel-border, #334155)",
+                display: "flex",
+                justifyContent: "center",
+                background: "rgba(0,0,0,0.1)",
+              }}
+              title={`로그인 사용자: ${currentUser.name || currentUser.id} (관리자)`}
+            >
+              <span style={{ fontSize: 16 }}>👤</span>
+            </div>
+          ) : (
+            <div
+              style={{
+                padding: "16px 20px",
+                borderBottom: "1px solid var(--panel-border, #334155)",
+                background: "rgba(0,0,0,0.1)",
+              }}
+            >
+              <div style={{ fontSize: 11, color: "var(--text-dim, #94a3b8)", marginBottom: 4, fontWeight: 500 }}>
+                현재 로그인 사용자
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-main, #f1f5f9)", display: "flex", alignItems: "center", gap: 6 }}>
+                👤 {currentUser.name || currentUser.id} <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "#4f46e5", color: "#fff", fontWeight: 700 }}>관리자</span>
+              </div>
+            </div>
+          )
+        )}
+
+        {/* 메인 탐색 메뉴 */}
+        <div
+          style={{
+            flex: 1,
+            padding: sidebarCollapsed ? "24px 8px" : "24px 16px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+          }}
+        >
+          <button
+            onClick={() => setCurrentView("monitor")}
+            title={sidebarCollapsed ? "보관 구역" : undefined}
+            style={{
+              width: "100%",
+              padding: sidebarCollapsed ? "12px 0" : "12px 16px",
+              borderRadius: 8,
+              fontSize: 14,
+              fontWeight: 700,
+              justifyContent: sidebarCollapsed ? "center" : "flex-start",
+              background: currentView === "monitor" ? (isLightMode ? "rgba(79, 70, 229, 0.08)" : "rgba(99, 102, 241, 0.15)") : "transparent",
+              color: currentView === "monitor" ? (isLightMode ? "#4f46e5" : "#818cf8") : "var(--text-dim, #94a3b8)",
+              display: "flex",
+              alignItems: "center",
+              gap: sidebarCollapsed ? 0 : 10,
+              border: currentView === "monitor" ? (isLightMode ? "1px solid rgba(79, 70, 229, 0.2)" : "1px solid rgba(99, 102, 241, 0.3)") : "1px solid transparent",
+            }}
+          >
+            <Package size={18} />
+            {!sidebarCollapsed && <span>보관 구역</span>}
+          </button>
+
+          <button
+            onClick={() => setCurrentView("rent")}
+            title={sidebarCollapsed ? "대여/반납 대장" : undefined}
+            style={{
+              width: "100%",
+              padding: sidebarCollapsed ? "12px 0" : "12px 16px",
+              borderRadius: 8,
+              fontSize: 14,
+              fontWeight: 700,
+              justifyContent: sidebarCollapsed ? "center" : "flex-start",
+              background: currentView === "rent" ? (isLightMode ? "rgba(79, 70, 229, 0.08)" : "rgba(99, 102, 241, 0.15)") : "transparent",
+              color: currentView === "rent" ? (isLightMode ? "#4f46e5" : "#818cf8") : "var(--text-dim, #94a3b8)",
+              display: "flex",
+              alignItems: "center",
+              gap: sidebarCollapsed ? 0 : 10,
+              border: currentView === "rent" ? (isLightMode ? "1px solid rgba(79, 70, 229, 0.2)" : "1px solid rgba(99, 102, 241, 0.3)") : "1px solid transparent",
+            }}
+          >
+            <ClipboardList size={18} />
+            {!sidebarCollapsed && <span>대여/반납 대장</span>}
+          </button>
+
+          <button
+            onClick={() => setCurrentView("defect")}
+            title={sidebarCollapsed ? "불량로그" : undefined}
+            style={{
+              width: "100%",
+              padding: sidebarCollapsed ? "12px 0" : "12px 16px",
+              borderRadius: 8,
+              fontSize: 14,
+              fontWeight: 700,
+              justifyContent: sidebarCollapsed ? "center" : "flex-start",
+              background: currentView === "defect" ? (isLightMode ? "rgba(225, 29, 72, 0.08)" : "rgba(244, 63, 94, 0.15)") : "transparent",
+              color: currentView === "defect" ? (isLightMode ? "#e11d48" : "#f43f5e") : "var(--text-dim, #94a3b8)",
+              display: "flex",
+              alignItems: "center",
+              gap: sidebarCollapsed ? 0 : 10,
+              border: currentView === "defect" ? (isLightMode ? "1px solid rgba(225, 29, 72, 0.2)" : "1px solid rgba(244, 63, 94, 0.3)") : "1px solid transparent",
+            }}
+          >
+            <AlertTriangle size={18} />
+            {!sidebarCollapsed && <span>불량로그</span>}
+          </button>
+        </div>
+
+        {/* 사이드바 하단 영역 */}
+        <div
+          style={{
+            padding: sidebarCollapsed ? "16px 8px" : "16px",
+            borderTop: "1px solid var(--panel-border, #334155)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+          }}
+        >
+          {isAdmin && (
+            <button
+              onClick={() => setShowSetup(true)}
+              style={{
+                width: "100%",
+                padding: sidebarCollapsed ? "0" : "0 14px",
+                height: 38,
+                borderRadius: 8,
+                background: "var(--input-bg, #0f172a)",
+                border: "1px solid var(--panel-border, #334155)",
+                color: "var(--text-main, #f1f5f9)",
+                fontSize: 12,
+                fontWeight: 700,
+                gap: sidebarCollapsed ? 0 : 6,
+                cursor: "pointer",
+                justifyContent: "center",
+              }}
+              title={sidebarCollapsed ? (connected ? "연동 관리" : "구글 시트 연동") : undefined}
+            >
+              <Settings size={14} />
+              {!sidebarCollapsed && (connected ? "연동 관리" : "구글 시트 연동")}
+            </button>
+          )}
+
+          <button
+            onClick={() => {
+              setIsAdmin(false);
+              setCurrentUser(null);
+              localStorage.removeItem("wms_is_admin");
+              localStorage.removeItem("wms_current_user");
+              setCurrentView("login");
+              showToast("로그아웃되었습니다. 로그인 화면으로 이동합니다.", "info");
+            }}
+            style={{
+              width: "100%",
+              padding: sidebarCollapsed ? "0" : "0 12px",
+              height: 38,
+              borderRadius: 8,
+              background: "rgba(239, 68, 68, 0.1)",
+              border: "1px solid rgba(239, 68, 68, 0.2)",
+              color: "#f87171",
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: sidebarCollapsed ? 0 : 6,
+            }}
+            title={sidebarCollapsed ? "로그아웃" : "관리자 세션을 종료하고 메인 화면으로 돌아갑니다."}
+          >
+            <span>🔒</span>
+            {!sidebarCollapsed && <span>로그아웃</span>}
+          </button>
+        </div>
+      </aside>
+
+      {/* ===== 2. 우측 메인 작업 영역 ===== */}
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          height: "100vh",
+        }}
+      >
+
+      {/* ===== 1. 상단 툴바 (우측 작업 영역 내부) ===== */}
       <header
         style={{
           height: 64,
@@ -1238,28 +1524,11 @@ export default function App() {
           flexShrink: 0,
         }}
       >
-        {/* 로고 영역 */}
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <div
-            className="mono"
-            style={{
-              fontWeight: 900,
-              fontSize: 16,
-              color: "#ffffff",
-              letterSpacing: "0.05em",
-              background: "#4f46e5",
-              padding: "6px 12px",
-              borderRadius: 4,
-              boxShadow: "0 2px 4px rgba(0,0,0,0.2)",
-            }}
-          >
-            LOGISTIX™
-          </div>
-          <div>
-            <div style={{ fontWeight: 800, fontSize: 15, color: "var(--text-main, #f8fafc)", display: "flex", alignItems: "center", gap: 6, letterSpacing: "-0.01em" }}>
-              WMS PRO
-            </div>
-          </div>
+        {/* 현재 페이지 제목 */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 16, fontWeight: 800, color: "var(--text-main, #f1f5f9)", letterSpacing: "-0.02em" }}>
+            {currentView === "monitor" ? "📦 보관 구역 모니터링" : currentView === "rent" ? "📋 대여/반납 대장" : "⚠️ 불량로그 기록"}
+          </span>
         </div>
 
         {/* 품목 실시간 검색란 */}
@@ -1379,90 +1648,9 @@ export default function App() {
           )}
         </div>
 
-        {/* 동기화 버튼 및 연동 메뉴 */}
+        {/* 우측 보조 컨트롤 영역 */}
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <ConnectionBadge connected={connected} dirty={dirty} saving={saving} lastSync={lastSync} />
-
-          {/* 처음 화면으로 (로그아웃) */}
-          <button
-            onClick={() => {
-              setIsAdmin(false);
-              setCurrentUser(null);
-              localStorage.removeItem("wms_is_admin");
-              localStorage.removeItem("wms_current_user");
-              setCurrentView("login");
-              showToast("로그아웃되었습니다. 로그인 화면으로 이동합니다.", "info");
-            }}
-            style={{
-              padding: "0 12px",
-              height: 34,
-              borderRadius: 6,
-              background: "rgba(239, 68, 68, 0.1)",
-              border: "1px solid rgba(239, 68, 68, 0.3)",
-              color: "#f87171",
-              fontSize: 12,
-              fontWeight: 700,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 5,
-            }}
-            title="관리자 세션을 종료하고 메인 화면으로 돌아갑니다."
-          >
-            🔒 로그아웃 (처음으로)
-          </button>
-
-          {/* 뷰 이동 탭 */}
-          <div style={{ display: "flex", gap: 4, background: "var(--input-bg, #0f172a)", padding: 3, borderRadius: 6, border: "1px solid var(--panel-border, #334155)" }}>
-            <button
-              onClick={() => setCurrentView("monitor")}
-              style={{
-                padding: "4px 10px",
-                height: 26,
-                borderRadius: 4,
-                fontSize: 11,
-                fontWeight: 700,
-                border: "none",
-                cursor: "pointer",
-                background: currentView === "monitor" ? "rgba(255,255,255,0.08)" : "transparent",
-                color: currentView === "monitor" ? "var(--text-main, #f1f5f9)" : "var(--text-dim, #94a3b8)",
-              }}
-            >
-              📦 보관 구역
-            </button>
-            <button
-              onClick={() => setCurrentView("rent")}
-              style={{
-                padding: "4px 10px",
-                height: 26,
-                borderRadius: 4,
-                fontSize: 11,
-                fontWeight: 700,
-                border: "none",
-                cursor: "pointer",
-                background: currentView === "rent" ? "rgba(99, 102, 241, 0.15)" : "transparent",
-                color: currentView === "rent" ? "#818cf8" : "var(--text-dim, #94a3b8)",
-              }}
-            >
-              📋 대여/반납 대장
-            </button>
-            <button
-              onClick={() => setCurrentView("defect")}
-              style={{
-                padding: "4px 10px",
-                height: 26,
-                borderRadius: 4,
-                fontSize: 11,
-                fontWeight: 700,
-                border: "none",
-                cursor: "pointer",
-                background: currentView === "defect" ? "rgba(244, 63, 94, 0.15)" : "transparent",
-                color: currentView === "defect" ? "#f43f5e" : "var(--text-dim, #94a3b8)",
-              }}
-            >
-              ⚠️ 불량로그
-            </button>
-          </div>
 
           <button
             onClick={toggleLightMode}
@@ -1495,27 +1683,6 @@ export default function App() {
           >
             <RefreshCw size={14} />
           </button>
-
-          {isAdmin && (
-            <button
-              onClick={() => setShowSetup(true)}
-              style={{
-                padding: "0 14px",
-                height: 34,
-                borderRadius: 6,
-                background: "#4f46e5",
-                border: "1px solid #4f46e5",
-                color: "#ffffff",
-                fontSize: 12,
-                fontWeight: 700,
-                gap: 6,
-                cursor: "pointer",
-              }}
-            >
-              <Settings size={13} />
-              {connected ? "URL 수정 / 연동 관리" : "구글 시트 연동"}
-            </button>
-          )}
         </div>
       </header>
 
@@ -2289,6 +2456,7 @@ export default function App() {
           {toast.msg}
         </div>
       )}
+      </div>
     </div>
   );
 }
