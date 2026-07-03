@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { ClipboardList, Settings, ShieldAlert, PackageCheck, Link as LinkIcon, RefreshCw, CheckCircle, AlertTriangle, HelpCircle, ChevronDown, ChevronUp } from "lucide-react";
+import { ClipboardList, Settings, ShieldAlert, PackageCheck, Link as LinkIcon, RefreshCw, CheckCircle, AlertTriangle, HelpCircle, ChevronDown, ChevronUp, Lock } from "lucide-react";
 
 interface LandingPageProps {
   onNavigate: (view: "rental" | "login") => void;
@@ -12,6 +12,7 @@ interface LandingPageProps {
   onConnect: () => void;
   onDisconnect: () => void;
   onOpenSetup: () => void;
+  isMobile: boolean;
 }
 
 export default function LandingPage({
@@ -25,6 +26,7 @@ export default function LandingPage({
   onConnect,
   onDisconnect,
   onOpenSetup,
+  isMobile,
 }: LandingPageProps) {
   const [showGuide, setShowGuide] = useState(false);
 
@@ -263,6 +265,7 @@ export default function LandingPage({
             display: "flex",
             flexDirection: "column",
             alignItems: "flex-start",
+            opacity: isMobile ? 0.7 : 1,
           }}
           onMouseEnter={(e) => {
             e.currentTarget.style.transform = "translateY(-4px)";
@@ -326,7 +329,13 @@ export default function LandingPage({
               border: `1px solid ${isLightMode ? "#0f172a" : "#475569"}`,
             }}
           >
-            관리자 모드 로그인 →
+            {isMobile ? (
+              <>
+                <Lock size={14} /> 태블릿/PC 환경에서만 이용 가능
+              </>
+            ) : (
+              "관리자 모드 로그인 →"
+            )}
           </div>
         </div>
       </div>

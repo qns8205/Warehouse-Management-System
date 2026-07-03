@@ -14,11 +14,15 @@ import {
   Check,
   ImageOff,
   ClipboardPlus,
+  User,
+  Clock,
+  PackageCheck,
 } from "lucide-react";
 import { getGoogleDriveImageUrl, isFuzzyMatch, formatTimestampLocal } from "../utils/drive";
 
 interface MobileViewPageProps {
   inventory: InventoryItem[];
+  rentLogs: RentLog[];
   onAddRentLog: (log: RentLog) => Promise<void>;
   onBack: () => void;
   isLightMode: boolean;
@@ -28,6 +32,32 @@ interface MobileViewPageProps {
 
 type SheetMode = "detail" | "form" | "register" | null;
 
+// 대여 기록의 타임스탬프를 "YYYY/MM/DD HH:MM" 형태로 정규화 (즉시반납 메모 매칭용, 데스크탑 대여대장과 동일 로직)
+function formatTimestampToMinutes(tsStr: string): string {
+  if (!tsStr) return "실시간 동기화";
+  const clean = tsStr.trim();
+  try {
+    const parsedPart = clean.replace(/-/g, "/");
+    const d = new Date(parsedPart);
+    if (!isNaN(d.getTime())) {
+      const pad = (n: number) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+  } catch (e) {
+    // ignore
+  }
+  return clean;
+}
+
+interface OutstandingRental {
+  timestamp: string;
+  location: string;
+  name: string;
+  user: string;
+  qty: number;
+  remainingQty: number;
+}
+
 /**
  * 모바일 전용 "열람용 모드" 화면.
  * PC 레이아웃을 그대로 축소한 것이 아니라, 검색 -> 아이템 확인(사진 포함) -> 대여/반납
@@ -35,6 +65,7 @@ type SheetMode = "detail" | "form" | "register" | null;
  */
 export default function MobileViewPage({
   inventory,
+  rentLogs,
   onAddRentLog,
   onBack,
   isLightMode,
@@ -109,6 +140,84 @@ export default function MobileViewPage({
     );
   }, [inventory, registerQuery]);
 
+  // ---------- 현재 반납 처리가 이루어지지 않은(미반납) 대여 건 목록 ----------
+  // 대여/반납 로그를 시간순으로 훑어 품목+대여자 단위로 잔여 수량을 추적한다.
+  // (데스크탑 "대여/반납 대장"의 즉시반납 매칭 로직과 동일한 방식으로 계산하여 일관성 유지)
+  const outstandingRentals: OutstandingRental[] = useMemo(() => {
+    const chronoLogs = [...rentLogs].sort((a, b) => {
+      const timeA = a.timestamp || "";
+      const timeB = b.timestamp || "";
+      return timeA.localeCompare(timeB);
+    });
+
+    const outstanding: { [key: string]: OutstandingRental[] } = {};
+
+    for (const log of chronoLogs) {
+      if (!log.name || !log.user) continue;
+      const key = `${log.name.trim()}||${log.user.trim()}`;
+      const logQty = Number(log.qty) || 0;
+
+      if (log.type === "대여") {
+        if (!outstanding[key]) outstanding[key] = [];
+        outstanding[key].push({
+          timestamp: log.timestamp,
+          location: log.location,
+          name: log.name,
+          user: log.user,
+          qty: logQty,
+          remainingQty: logQty,
+        });
+      } else if (log.type === "반납") {
+        let matchedByNote = false;
+        if (log.note && log.note.includes("[즉시반납]")) {
+          const list = outstanding[key] || [];
+          for (const item of list) {
+            if (item.remainingQty > 0) {
+              const formatted = formatTimestampToMinutes(item.timestamp);
+              if (log.note.includes(formatted)) {
+                item.remainingQty = 0;
+                matchedByNote = true;
+                break;
+              }
+            }
+          }
+        }
+        if (!matchedByNote) {
+          let returnQtyRemaining = logQty;
+          const list = outstanding[key] || [];
+          for (const item of list) {
+            if (item.remainingQty > 0) {
+              const deduct = Math.min(item.remainingQty, returnQtyRemaining);
+              item.remainingQty -= deduct;
+              returnQtyRemaining -= deduct;
+              if (returnQtyRemaining <= 0) break;
+            }
+          }
+        }
+      }
+    }
+
+    const result: OutstandingRental[] = [];
+    Object.values(outstanding).forEach((list) => {
+      list.forEach((item) => {
+        if (item.remainingQty > 0) result.push(item);
+      });
+    });
+    result.sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || ""));
+    return result;
+  }, [rentLogs]);
+
+  // 반납 등록 시트 내부 검색 (품목명 / 위치 / 대여자명)
+  const registerFilteredOutstanding = useMemo(() => {
+    if (!registerQuery.trim()) return outstandingRentals;
+    return outstandingRentals.filter(
+      (o) =>
+        isFuzzyMatch(o.name || "", registerQuery) ||
+        isFuzzyMatch(o.location || "", registerQuery) ||
+        isFuzzyMatch(o.user || "", registerQuery)
+    );
+  }, [outstandingRentals, registerQuery]);
+
   const isRentDisabled = (item: InventoryItem) =>
     item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false);
 
@@ -155,6 +264,32 @@ export default function MobileViewPage({
     setFormUser("");
     setFormQty(1);
     setFormNote("");
+    setFormOrigin("register");
+    setSheetMode("form");
+  };
+
+  // 반납 대기 목록에서 미반납 대여 건을 선택 -> 반납 폼으로 이동 (담당자/수량 자동 채움)
+  const selectOutstandingRental = (entry: OutstandingRental) => {
+    const matched = inventory.find((it) => (it.name || "").trim() === entry.name.trim());
+    const item: InventoryItem = matched
+      ? matched
+      : {
+          rowIndex: -1,
+          location: entry.location || "기타",
+          photo: "",
+          name: entry.name,
+          link: "N/A",
+          stock: "N/A",
+          updatedAt: "",
+          manager: "",
+          note: "리스트 외 임시 품목",
+          spec: "",
+        };
+    setSelectedItem(item);
+    setActionType("반납");
+    setFormUser(entry.user);
+    setFormQty(entry.remainingQty > 0 ? entry.remainingQty : 1);
+    setFormNote(`[즉시반납] ${formatTimestampToMinutes(entry.timestamp)} 대여 건 반납 완료`);
     setFormOrigin("register");
     setSheetMode("form");
   };
@@ -830,7 +965,13 @@ export default function MobileViewPage({
                         padding: 0,
                       }}
                     >
-                      {isCustomMode ? "🔍 기존 목록에서 선택" : "✏️ 리스트에 없는 새 물품 등록"}
+                      {isCustomMode
+                        ? actionType === "반납"
+                          ? "🔍 반납 대기 목록에서 선택"
+                          : "🔍 기존 목록에서 선택"
+                        : actionType === "반납"
+                        ? "✏️ 목록에 없는 물품 직접 반납 등록"
+                        : "✏️ 리스트에 없는 새 물품 등록"}
                     </button>
                   </div>
 
@@ -896,6 +1037,147 @@ export default function MobileViewPage({
                         다음: 수량 · 이름 입력
                       </button>
                     </div>
+                  ) : actionType === "반납" ? (
+                    <>
+                      <div style={{ position: "relative", marginBottom: "10px" }}>
+                        <Search
+                          size={16}
+                          style={{ position: "absolute", left: "14px", top: "50%", transform: "translateY(-50%)", color: TEXT_DIM }}
+                        />
+                        <input
+                          className="mvp-input"
+                          type="text"
+                          inputMode="search"
+                          placeholder="품목명, 위치, 대여자명으로 검색"
+                          value={registerQuery}
+                          onChange={(e) => setRegisterQuery(e.target.value)}
+                          autoFocus
+                          style={{
+                            width: "100%",
+                            background: INPUT_BG,
+                            border: `1px solid ${BORDER}`,
+                            borderRadius: "12px",
+                            padding: "13px 14px 13px 38px",
+                            color: TEXT_MAIN,
+                            fontSize: "14px",
+                            outline: "none",
+                          }}
+                        />
+                      </div>
+
+                      <div style={{ fontSize: "11px", color: TEXT_DIM, marginBottom: "8px", fontWeight: 600 }}>
+                        현재 반납 처리가 되지 않은 물품입니다. 눌러서 바로 반납 처리하세요.
+                      </div>
+
+                      <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxHeight: "46vh", overflowY: "auto" }}>
+                        {registerFilteredOutstanding.length === 0 ? (
+                          <div
+                            style={{
+                              textAlign: "center",
+                              color: TEXT_DIM,
+                              fontSize: "12.5px",
+                              padding: "28px 0",
+                              display: "flex",
+                              flexDirection: "column",
+                              alignItems: "center",
+                              gap: "8px",
+                            }}
+                          >
+                            <PackageCheck size={28} style={{ opacity: 0.5 }} />
+                            반납 대기 중인 물품이 없습니다.
+                          </div>
+                        ) : (
+                          registerFilteredOutstanding.map((entry, idx) => (
+                            <div
+                              key={`out-${entry.timestamp}-${entry.name}-${idx}`}
+                              className="mvp-card"
+                              onClick={() => selectOutstandingRental(entry)}
+                              style={{
+                                background: isLightMode ? "#f8fafc" : "#0f172a",
+                                border: `1px solid ${BORDER}`,
+                                borderRadius: "14px",
+                                padding: "10px",
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "10px",
+                                cursor: "pointer",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  width: "36px",
+                                  height: "36px",
+                                  borderRadius: "10px",
+                                  background: "rgba(16,185,129,0.12)",
+                                  color: GREEN,
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  flexShrink: 0,
+                                }}
+                              >
+                                <Package size={16} />
+                              </div>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div
+                                  style={{
+                                    fontSize: "13px",
+                                    fontWeight: 800,
+                                    color: TEXT_MAIN,
+                                    whiteSpace: "nowrap",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                  }}
+                                >
+                                  {entry.name || "(이름 없음)"}
+                                </div>
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    flexWrap: "wrap",
+                                    gap: "6px",
+                                    fontSize: "10.5px",
+                                    color: TEXT_DIM,
+                                    marginTop: "3px",
+                                  }}
+                                >
+                                  <span style={{ display: "inline-flex", alignItems: "center", gap: "2px" }}>
+                                    <User size={10} />
+                                    {entry.user || "이름 미상"}
+                                  </span>
+                                  <span>·</span>
+                                  <span className="mono" style={{ display: "inline-flex", alignItems: "center", gap: "2px" }}>
+                                    <MapPin size={10} />
+                                    {entry.location || "위치 미지정"}
+                                  </span>
+                                  <span>·</span>
+                                  <span style={{ display: "inline-flex", alignItems: "center", gap: "2px" }}>
+                                    <Clock size={10} />
+                                    {formatTimestampToMinutes(entry.timestamp)}
+                                  </span>
+                                </div>
+                              </div>
+                              <span
+                                className="mono"
+                                style={{
+                                  fontSize: "11px",
+                                  fontWeight: 800,
+                                  color: GREEN,
+                                  background: "rgba(16,185,129,0.1)",
+                                  padding: "3px 8px",
+                                  borderRadius: "999px",
+                                  flexShrink: 0,
+                                }}
+                              >
+                                미반납 {entry.remainingQty}개
+                              </span>
+                              <ChevronRight size={14} color={TEXT_DIM} style={{ flexShrink: 0 }} />
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </>
                   ) : (
                     <>
                       <div style={{ position: "relative", marginBottom: "10px" }}>

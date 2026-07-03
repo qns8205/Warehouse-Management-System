@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { WmsUser } from "../types";
-import { Lock, User, RefreshCw, KeyRound, Eye, ShieldAlert } from "lucide-react";
+import { Lock, User, RefreshCw, KeyRound, Eye, ShieldAlert, MonitorSmartphone } from "lucide-react";
 
 interface LoginPageProps {
   users: WmsUser[];
@@ -9,6 +9,7 @@ interface LoginPageProps {
   isLightMode: boolean;
   onSyncUsers: () => Promise<void>;
   syncing: boolean;
+  isMobile: boolean;
 }
 
 export default function LoginPage({
@@ -18,8 +19,9 @@ export default function LoginPage({
   isLightMode,
   onSyncUsers,
   syncing,
+  isMobile,
 }: LoginPageProps) {
-  const [selectedMode, setSelectedMode] = useState<"view" | "admin">("admin");
+  const [selectedMode, setSelectedMode] = useState<"view" | "admin">(isMobile ? "view" : "admin");
   const [idInput, setIdInput] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
   const [localError, setLocalError] = useState("");
@@ -27,6 +29,11 @@ export default function LoginPage({
   const handleLoginSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setLocalError("");
+
+    if (isMobile) {
+      setLocalError("관리자 모드는 태블릿 또는 PC 환경에서만 이용할 수 있습니다.");
+      return;
+    }
 
     if (!idInput.trim() || !passwordInput.trim()) {
       setLocalError("아이디와 비밀번호를 모두 입력해 주세요.");
@@ -175,6 +182,10 @@ export default function LoginPage({
           <button
             type="button"
             onClick={() => {
+              if (isMobile) {
+                setLocalError("관리자 모드는 태블릿 또는 PC 환경에서만 이용할 수 있습니다.");
+                return;
+              }
               setSelectedMode("admin");
               setLocalError("");
             }}
@@ -185,22 +196,25 @@ export default function LoginPage({
               border: `2px solid ${selectedMode === "admin" ? ACCENT : BORDER_COLOR}`,
               borderRadius: "20px",
               padding: "32px 20px",
-              cursor: "pointer",
+              cursor: isMobile ? "not-allowed" : "pointer",
               textAlign: "center",
               display: "flex",
               flexDirection: "column",
               alignItems: "center",
               gap: "14px",
               transition: "all 0.2s ease-in-out",
+              opacity: isMobile ? 0.55 : 1,
               boxShadow: selectedMode === "admin" ? `0 10px 25px ${isLightMode ? "rgba(99, 102, 241, 0.15)" : "rgba(99, 102, 241, 0.3)"}` : "none",
             }}
             onMouseEnter={(e) => {
+              if (isMobile) return;
               if (selectedMode !== "admin") {
                 e.currentTarget.style.borderColor = ACCENT;
                 e.currentTarget.style.background = isLightMode ? "rgba(99, 102, 241, 0.02)" : "rgba(255, 255, 255, 0.03)";
               }
             }}
             onMouseLeave={(e) => {
+              if (isMobile) return;
               if (selectedMode !== "admin") {
                 e.currentTarget.style.borderColor = BORDER_COLOR;
                 e.currentTarget.style.background = "transparent";
@@ -220,22 +234,33 @@ export default function LoginPage({
                 transition: "all 0.2s",
               }}
             >
-              <ShieldAlert size={26} />
+              {isMobile ? <Lock size={26} /> : <ShieldAlert size={26} />}
             </div>
             <div>
               <div style={{ fontSize: "16px", fontWeight: 800, color: TEXT_MAIN, marginBottom: "4px" }}>
                 관리자 모드
               </div>
               <div style={{ fontSize: "11.5px", color: TEXT_DIM, lineHeight: "1.4" }}>
-                재고 정보 수정 및 등록<br />
-                <span style={{ color: ACCENT, fontWeight: 600 }}>[로그인 필요]</span>
+                {isMobile ? (
+                  <>
+                    태블릿 또는 PC 환경에서만 이용 가능<br />
+                    <span style={{ color: "#f59e0b", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                      <MonitorSmartphone size={12} /> 모바일에서는 제한됨
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    재고 정보 수정 및 등록<br />
+                    <span style={{ color: ACCENT, fontWeight: 600 }}>[로그인 필요]</span>
+                  </>
+                )}
               </div>
             </div>
           </button>
         </div>
 
         {/* Dynamic Panel based on selection */}
-        {selectedMode === "admin" && (
+        {selectedMode === "admin" && !isMobile && (
           <form onSubmit={handleLoginSubmit} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
             {/* ID Input */}
             <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
@@ -361,6 +386,27 @@ export default function LoginPage({
               🔐 관리자 로그인 및 모니터링 진입
             </button>
           </form>
+        )}
+
+        {isMobile && (localError || selectedMode === "admin") && (
+          <div
+            style={{
+              fontSize: "12px",
+              color: "#f59e0b",
+              background: "rgba(245, 158, 11, 0.08)",
+              padding: "10px 14px",
+              borderRadius: "10px",
+              border: "1px solid rgba(245, 158, 11, 0.2)",
+              textAlign: "center",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "6px",
+            }}
+          >
+            <Lock size={13} />
+            {localError || "관리자 모드는 태블릿 또는 PC 환경에서만 이용할 수 있습니다. 열람용 모드를 이용해 주세요."}
+          </div>
         )}
 
         {/* Sync Area at the bottom */}

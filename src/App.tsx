@@ -353,6 +353,18 @@ export default function App() {
     localStorage.setItem("wms_is_admin", String(isAdmin));
   }, [isAdmin]);
 
+  // 관리자 모드는 오직 태블릿/PC 환경에서만 허용 (이전 세션에서 캐시된 관리자 상태로
+  // 모바일(폰)에서 접속했을 경우를 대비한 안전장치)
+  useEffect(() => {
+    if (isMobile && isAdmin) {
+      setIsAdmin(false);
+      localStorage.setItem("wms_is_admin", "false");
+      setCurrentUser(null);
+      localStorage.removeItem("wms_current_user");
+      showToast("관리자 모드는 태블릿 또는 PC 환경에서만 이용할 수 있습니다. 열람용 모드로 전환합니다.", "warn");
+    }
+  }, [isMobile, isAdmin]);
+
   /* ---------------- Apps Script API 연동 로직 ---------------- */
   async function callScript(action: string, payload: any) {
     if (!scriptUrl) throw new Error("구글 스프레드시트 연동 URL이 입력되지 않았습니다.");
@@ -1260,6 +1272,7 @@ export default function App() {
           showToast("스프레드시트 연동이 해제되었습니다. 가상 데모 모드로 동작합니다.", "info");
         }}
         onOpenSetup={() => setShowSetup(true)}
+        isMobile={isMobile}
       />
     );
   }
@@ -1269,6 +1282,10 @@ export default function App() {
       <LoginPage
         users={users}
         onLoginSuccess={(user) => {
+          if (isMobile) {
+            showToast("관리자 모드는 태블릿 또는 PC 환경에서만 이용할 수 있습니다.", "warn");
+            return;
+          }
           setCurrentUser(user);
           localStorage.setItem("wms_current_user", JSON.stringify(user));
           setIsAdmin(true);
@@ -1286,6 +1303,7 @@ export default function App() {
         isLightMode={isLightMode}
         onSyncUsers={handleRefresh}
         syncing={connecting}
+        isMobile={isMobile}
       />
     );
   }
@@ -1314,6 +1332,7 @@ export default function App() {
     return (
       <MobileViewPage
         inventory={inventory}
+        rentLogs={rentLogs}
         onAddRentLog={handleAddRentLog}
         onBack={() => {
           setIsAdmin(false);
