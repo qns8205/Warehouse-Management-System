@@ -13,6 +13,7 @@ import RentLogsPage from "./components/RentLogsPage";
 import LandingPage from "./components/LandingPage";
 import LoginPage from "./components/LoginPage";
 import RentalPage from "./components/RentalPage";
+import MobileViewPage from "./components/MobileViewPage";
 
 // Icons
 import {
@@ -143,6 +144,26 @@ export default function App() {
   const [inventory, setInventory] = useState<InventoryItem[]>(DEMO_INVENTORY);
   const [racks, setRacks] = useState<Rack[]>([]);
   const [selectedRackId, setSelectedRackId] = useState<string | null>(null);
+
+  // 모바일 화면 여부 감지 (열람용 모드 진입 시 전용 모바일 UI를 보여주기 위함)
+  const [isMobile, setIsMobile] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia("(max-width: 768px)").matches;
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mql = window.matchMedia("(max-width: 768px)");
+    const handleChange = () => setIsMobile(mql.matches);
+    handleChange();
+    if (mql.addEventListener) {
+      mql.addEventListener("change", handleChange);
+      return () => mql.removeEventListener("change", handleChange);
+    } else {
+      // 구형 브라우저 호환
+      mql.addListener(handleChange);
+      return () => mql.removeListener(handleChange);
+    }
+  }, []);
 
   // 구글 Apps Script 연동 상태 (로컬 스토리지 보존으로 새로고침해도 자동복구)
   const [scriptUrl, setScriptUrl] = useState(() => {
@@ -1282,6 +1303,27 @@ export default function App() {
         connected={connected}
         lastSync={lastSync}
         onOpenSetup={() => setShowSetup(true)}
+      />
+    );
+  }
+
+  // 모바일 + 열람용 모드(비관리자)인 경우, PC 화면을 축소한 형태가 아닌
+  // 검색 / 사진확인 / 대여·반납에 집중한 전용 모바일 UI를 노출한다.
+  // (불량로그, 랙 위치도 등 관리자용 화면은 모바일 열람용 모드에서 제외)
+  if (currentView === "monitor" && !isAdmin && isMobile) {
+    return (
+      <MobileViewPage
+        inventory={inventory}
+        onAddRentLog={handleAddRentLog}
+        onBack={() => {
+          setIsAdmin(false);
+          localStorage.setItem("wms_is_admin", "false");
+          setCurrentUser(null);
+          setCurrentView("login");
+        }}
+        isLightMode={isLightMode}
+        toggleLightMode={toggleLightMode}
+        connected={connected}
       />
     );
   }
