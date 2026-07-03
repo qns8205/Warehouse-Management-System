@@ -13,10 +13,8 @@ import {
   ChevronRight,
   Check,
   ImageOff,
-  ClipboardPlus,
   User,
   Clock,
-  PackageCheck,
 } from "lucide-react";
 import { getGoogleDriveImageUrl, isFuzzyMatch, formatTimestampLocal } from "../utils/drive";
 
@@ -30,37 +28,23 @@ interface MobileViewPageProps {
   connected: boolean;
 }
 
-type SheetMode = "detail" | "form" | "register" | null;
-
-// 대여 기록의 타임스탬프를 "YYYY/MM/DD HH:MM" 형태로 정규화 (즉시반납 메모 매칭용, 데스크탑 대여대장과 동일 로직)
-function formatTimestampToMinutes(tsStr: string): string {
-  if (!tsStr) return "실시간 동기화";
-  const clean = tsStr.trim();
-  try {
-    const parsedPart = clean.replace(/-/g, "/");
-    const d = new Date(parsedPart);
-    if (!isNaN(d.getTime())) {
-      const pad = (n: number) => String(n).padStart(2, "0");
-      return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    }
-  } catch (e) {
-    // ignore
-  }
-  return clean;
-}
+type Mode = "대여" | "반납";
+type SheetMode = "detail" | "form" | null;
 
 interface OutstandingRental {
-  timestamp: string;
-  location: string;
+  key: string;
   name: string;
+  location: string;
   user: string;
   qty: number;
-  remainingQty: number;
+  lastTimestamp: string;
 }
 
 /**
  * 모바일 전용 "열람용 모드" 화면.
- * PC 레이아웃을 그대로 축소한 것이 아니라, 검색 -> 아이템 확인(사진 포함) -> 대여/반납
+ * PC 화면을 그대로 축소한 것이 아니라, 맨 위의 [대여]/[반납] 두 버튼으로 모드를 고른 뒤
+ * - 대여: 전체 품목을 검색/열람하며 바로 대여
+ * - 반납: 지금까지 대여했지만 아직 반납되지 않은 물품만 모아서 보여주고 바로 반납
  * 흐름에만 집중한 터치 친화적 UI. 불량로그, 랙 위치도(모니터링)는 노출하지 않는다.
  */
 export default function MobileViewPage({
@@ -72,23 +56,20 @@ export default function MobileViewPage({
   toggleLightMode,
   connected,
 }: MobileViewPageProps) {
+  const [mode, setMode] = useState<Mode>("대여");
   const [searchQuery, setSearchQuery] = useState("");
+
   const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
+  const [outstandingContext, setOutstandingContext] = useState<OutstandingRental | null>(null);
   const [sheetMode, setSheetMode] = useState<SheetMode>(null);
-  const [formOrigin, setFormOrigin] = useState<"card" | "register">("card");
-  const [actionType, setActionType] = useState<"대여" | "반납">("대여");
+
   const [formUser, setFormUser] = useState("");
   const [formQty, setFormQty] = useState(1);
   const [formNote, setFormNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [localToast, setLocalToast] = useState<{ msg: string; type: "ok" | "error" | "warn" } | null>(null);
-
-  // 신규 대여/반납 등록(상단 CTA) 전용 상태
-  const [registerQuery, setRegisterQuery] = useState("");
-  const [isCustomMode, setIsCustomMode] = useState(false);
-  const [customName, setCustomName] = useState("");
-  const [customLocation, setCustomLocation] = useState("기타");
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -110,6 +91,7 @@ export default function MobileViewPage({
   const GREEN = "#10b981";
   const GREEN_LIGHT = "#34d399";
   const DANGER = "#ef4444";
+  const AMBER = "#f59e0b";
   const BG = isLightMode ? "#f8fafc" : "#0b0f19";
   const HEADER_BG = isLightMode ? "#ffffff" : "#151d30";
   const CARD_BG = isLightMode ? "#ffffff" : "#151d30";
@@ -117,9 +99,15 @@ export default function MobileViewPage({
   const TEXT_MAIN = isLightMode ? "#0f172a" : "#f1f5f9";
   const TEXT_DIM = isLightMode ? "#64748b" : "#94a3b8";
   const INPUT_BG = isLightMode ? "#f8fafc" : "#0f172a";
+  const MODE_COLOR = mode === "대여" ? ACCENT : GREEN;
+  const MODE_COLOR_LIGHT = mode === "대여" ? ACCENT_LIGHT : GREEN_LIGHT;
 
-  // ---------- 검색 필터 (아이템 리스트) ----------
-  const filteredItems = useMemo(() => {
+  // ---------- 대여 가능 여부: 숫자 재고가 0 이하일 때만 차단, N/A(문자/없음)는 항상 대여 가능 ----------
+  const isRentDisabled = (item: InventoryItem) =>
+    typeof item.stock === "number" && item.stock <= 0;
+
+  // ---------- 대여 탭: 전체 재고 검색 ----------
+  const filteredInventory = useMemo(() => {
     if (!searchQuery.trim()) return inventory;
     return inventory.filter(
       (item) =>
@@ -129,100 +117,73 @@ export default function MobileViewPage({
     );
   }, [inventory, searchQuery]);
 
-  // ---------- 검색 필터 (신규 등록 시트 내부 검색) ----------
-  const registerFilteredItems = useMemo(() => {
-    if (!registerQuery.trim()) return inventory;
-    return inventory.filter(
-      (item) =>
-        isFuzzyMatch(item.name || "", registerQuery) ||
-        isFuzzyMatch(item.location || "", registerQuery) ||
-        (item.spec && isFuzzyMatch(item.spec, registerQuery))
-    );
-  }, [inventory, registerQuery]);
-
-  // ---------- 현재 반납 처리가 이루어지지 않은(미반납) 대여 건 목록 ----------
-  // 대여/반납 로그를 시간순으로 훑어 품목+대여자 단위로 잔여 수량을 추적한다.
-  // (데스크탑 "대여/반납 대장"의 즉시반납 매칭 로직과 동일한 방식으로 계산하여 일관성 유지)
-  const outstandingRentals: OutstandingRental[] = useMemo(() => {
-    const chronoLogs = [...rentLogs].sort((a, b) => {
-      const timeA = a.timestamp || "";
-      const timeB = b.timestamp || "";
-      return timeA.localeCompare(timeB);
-    });
-
-    const outstanding: { [key: string]: OutstandingRental[] } = {};
-
-    for (const log of chronoLogs) {
-      if (!log.name || !log.user) continue;
-      const key = `${log.name.trim()}||${log.user.trim()}`;
-      const logQty = Number(log.qty) || 0;
-
-      if (log.type === "대여") {
-        if (!outstanding[key]) outstanding[key] = [];
-        outstanding[key].push({
-          timestamp: log.timestamp,
-          location: log.location,
-          name: log.name,
-          user: log.user,
-          qty: logQty,
-          remainingQty: logQty,
-        });
-      } else if (log.type === "반납") {
-        let matchedByNote = false;
-        if (log.note && log.note.includes("[즉시반납]")) {
-          const list = outstanding[key] || [];
-          for (const item of list) {
-            if (item.remainingQty > 0) {
-              const formatted = formatTimestampToMinutes(item.timestamp);
-              if (log.note.includes(formatted)) {
-                item.remainingQty = 0;
-                matchedByNote = true;
-                break;
-              }
-            }
-          }
-        }
-        if (!matchedByNote) {
-          let returnQtyRemaining = logQty;
-          const list = outstanding[key] || [];
-          for (const item of list) {
-            if (item.remainingQty > 0) {
-              const deduct = Math.min(item.remainingQty, returnQtyRemaining);
-              item.remainingQty -= deduct;
-              returnQtyRemaining -= deduct;
-              if (returnQtyRemaining <= 0) break;
-            }
-          }
-        }
+  // ---------- 반납 탭: 아직 반납되지 않은(미반납) 대여 내역 집계 ----------
+  const outstandingRentals = useMemo(() => {
+    const map = new Map<string, OutstandingRental>();
+    for (const log of rentLogs) {
+      const name = (log.name || "").trim();
+      const location = (log.location || "").trim();
+      const user = (log.user || "").trim();
+      if (!name) continue;
+      const key = `${name}||${location}||${user}`;
+      const qtyNum = Number(log.qty) || 0;
+      const delta = log.type === "대여" ? qtyNum : -qtyNum;
+      const existing = map.get(key);
+      if (existing) {
+        existing.qty += delta;
+        if ((log.timestamp || "") > existing.lastTimestamp) existing.lastTimestamp = log.timestamp || "";
+      } else {
+        map.set(key, { key, name, location, user, qty: delta, lastTimestamp: log.timestamp || "" });
       }
     }
-
-    const result: OutstandingRental[] = [];
-    Object.values(outstanding).forEach((list) => {
-      list.forEach((item) => {
-        if (item.remainingQty > 0) result.push(item);
-      });
-    });
-    result.sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || ""));
-    return result;
+    return Array.from(map.values())
+      .filter((o) => o.qty > 0)
+      .sort((a, b) => (b.lastTimestamp || "").localeCompare(a.lastTimestamp || ""));
   }, [rentLogs]);
 
-  // 반납 등록 시트 내부 검색 (품목명 / 위치 / 대여자명)
-  const registerFilteredOutstanding = useMemo(() => {
-    if (!registerQuery.trim()) return outstandingRentals;
+  const filteredOutstanding = useMemo(() => {
+    if (!searchQuery.trim()) return outstandingRentals;
     return outstandingRentals.filter(
       (o) =>
-        isFuzzyMatch(o.name || "", registerQuery) ||
-        isFuzzyMatch(o.location || "", registerQuery) ||
-        isFuzzyMatch(o.user || "", registerQuery)
+        isFuzzyMatch(o.name, searchQuery) ||
+        isFuzzyMatch(o.location, searchQuery) ||
+        isFuzzyMatch(o.user, searchQuery)
     );
-  }, [outstandingRentals, registerQuery]);
+  }, [outstandingRentals, searchQuery]);
 
-  const isRentDisabled = (item: InventoryItem) =>
-    item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false);
+  const switchMode = (m: Mode) => {
+    setMode(m);
+    setSearchQuery("");
+  };
 
-  const openDetail = (item: InventoryItem) => {
+  // ---------- 대여 탭에서 품목 탭 ----------
+  const openItemDetail = (item: InventoryItem) => {
     setSelectedItem(item);
+    setOutstandingContext(null);
+    setSheetMode("detail");
+  };
+
+  // ---------- 반납 탭에서 미반납 내역 탭 ----------
+  const openReturnDetail = (outstanding: OutstandingRental) => {
+    const matched = inventory.find(
+      (inv) => (inv.name || "").trim() === outstanding.name && (inv.location || "").trim() === outstanding.location
+    );
+    const item: InventoryItem =
+      matched ||
+      ({
+        rowIndex: -1,
+        location: outstanding.location,
+        photo: "",
+        name: outstanding.name,
+        link: "N/A",
+        stock: "N/A",
+        updatedAt: "",
+        manager: "",
+        note: "",
+        spec: "",
+      } as InventoryItem);
+    setSelectedItem(item);
+    setOutstandingContext(outstanding);
     setSheetMode("detail");
   };
 
@@ -230,102 +191,30 @@ export default function MobileViewPage({
     setSheetMode(null);
     setTimeout(() => {
       setSelectedItem(null);
-      setIsCustomMode(false);
-      setCustomName("");
-      setCustomLocation("기타");
-      setRegisterQuery("");
+      setOutstandingContext(null);
     }, 200);
   };
 
-  const openForm = (type: "대여" | "반납") => {
+  const openForm = () => {
     if (!selectedItem) return;
-    setActionType(type);
-    setFormUser("");
-    setFormQty(1);
-    setFormNote("");
-    setFormOrigin("card");
-    setSheetMode("form");
-  };
-
-  // 상단 CTA: 신규 대여/반납 등록 시작
-  const openRegister = () => {
-    setActionType("대여");
-    setRegisterQuery("");
-    setIsCustomMode(false);
-    setCustomName("");
-    setCustomLocation("기타");
-    setSelectedItem(null);
-    setSheetMode("register");
-  };
-
-  // 신규 등록 시트에서 기존 목록의 품목을 선택
-  const selectRegisterItem = (item: InventoryItem) => {
-    setSelectedItem(item);
-    setFormUser("");
-    setFormQty(1);
-    setFormNote("");
-    setFormOrigin("register");
-    setSheetMode("form");
-  };
-
-  // 반납 대기 목록에서 미반납 대여 건을 선택 -> 반납 폼으로 이동 (담당자/수량 자동 채움)
-  const selectOutstandingRental = (entry: OutstandingRental) => {
-    const matched = inventory.find((it) => (it.name || "").trim() === entry.name.trim());
-    const item: InventoryItem = matched
-      ? matched
-      : {
-          rowIndex: -1,
-          location: entry.location || "기타",
-          photo: "",
-          name: entry.name,
-          link: "N/A",
-          stock: "N/A",
-          updatedAt: "",
-          manager: "",
-          note: "리스트 외 임시 품목",
-          spec: "",
-        };
-    setSelectedItem(item);
-    setActionType("반납");
-    setFormUser(entry.user);
-    setFormQty(entry.remainingQty > 0 ? entry.remainingQty : 1);
-    setFormNote(`[즉시반납] ${formatTimestampToMinutes(entry.timestamp)} 대여 건 반납 완료`);
-    setFormOrigin("register");
-    setSheetMode("form");
-  };
-
-  // 신규 등록 시트에서 리스트에 없는 새 품목을 직접 입력
-  const confirmCustomItem = () => {
-    if (!customName.trim()) {
-      notify("품목 이름을 입력해 주세요.", "warn");
-      return;
+    if (mode === "반납" && outstandingContext) {
+      setFormUser(outstandingContext.user);
+      setFormQty(outstandingContext.qty);
+    } else {
+      setFormUser("");
+      setFormQty(1);
     }
-    const customItem: InventoryItem = {
-      rowIndex: -1,
-      location: customLocation.trim() || "기타",
-      photo: "",
-      name: customName.trim(),
-      link: "N/A",
-      stock: "N/A",
-      updatedAt: "",
-      manager: "",
-      note: "리스트 외 임시 품목",
-      spec: "",
-    };
-    setSelectedItem(customItem);
-    setFormUser("");
-    setFormQty(1);
     setFormNote("");
-    setFormOrigin("register");
     setSheetMode("form");
   };
 
-  // 폼 단계에서 뒤로가기: 진입 경로에 따라 상세화면 또는 등록화면으로 복귀
-  const handleFormBack = () => setSheetMode(formOrigin === "register" ? "register" : "detail");
+  const backToDetail = () => setSheetMode("detail");
 
   const maxQty =
-    actionType === "대여" && selectedItem && typeof selectedItem.stock === "number"
+    mode === "대여" && selectedItem && typeof selectedItem.stock === "number"
       ? selectedItem.stock
+      : mode === "반납" && outstandingContext
+      ? outstandingContext.qty
       : undefined;
 
   const handleSubmit = async () => {
@@ -339,7 +228,10 @@ export default function MobileViewPage({
       return;
     }
     if (maxQty !== undefined && formQty > maxQty) {
-      notify(`현재고(${maxQty}개)를 초과할 수 없습니다.`, "warn");
+      notify(
+        mode === "대여" ? `현재고(${maxQty}개)를 초과할 수 없습니다.` : `미반납 수량(${maxQty}개)을 초과할 수 없습니다.`,
+        "warn"
+      );
       return;
     }
 
@@ -349,14 +241,14 @@ export default function MobileViewPage({
         timestamp: formatTimestampLocal(),
         location: selectedItem.location,
         name: selectedItem.name,
-        type: actionType,
+        type: mode,
         qty: formQty,
         user: formUser.trim(),
-        note: formNote.trim() || `${actionType} 신청 (모바일 열람용 모드)`,
+        note: formNote.trim() || `${mode} 처리 (모바일 열람용 모드)`,
       };
       await onAddRentLog(log);
       notify(
-        actionType === "대여"
+        mode === "대여"
           ? `${selectedItem.name} ${formQty}개 대여 신청이 접수되었습니다.`
           : `${selectedItem.name} ${formQty}개 반납이 접수되었습니다.`,
         "ok"
@@ -367,6 +259,17 @@ export default function MobileViewPage({
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const inputBaseStyle: React.CSSProperties = {
+    width: "100%",
+    background: INPUT_BG,
+    border: `1px solid ${BORDER}`,
+    borderRadius: "12px",
+    padding: "13px 14px",
+    color: TEXT_MAIN,
+    fontSize: "15px",
+    outline: "none",
   };
 
   return (
@@ -384,6 +287,7 @@ export default function MobileViewPage({
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
         .mvp-btn { cursor: pointer; border: none; transition: all 0.15s ease-in-out; }
         .mvp-btn:active { transform: scale(0.97); }
+        .mvp-btn:disabled { cursor: not-allowed; }
         .mvp-card:active { transform: scale(0.985); }
         .mvp-input:focus { border-color: ${ACCENT} !important; box-shadow: 0 0 0 3px rgba(79,70,229,0.15) !important; }
         @keyframes mvpSheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
@@ -432,7 +336,7 @@ export default function MobileViewPage({
             <div
               style={{
                 fontSize: "10.5px",
-                color: connected ? GREEN_LIGHT : "#f59e0b",
+                color: connected ? GREEN_LIGHT : AMBER,
                 fontWeight: 700,
                 display: "flex",
                 alignItems: "center",
@@ -444,7 +348,7 @@ export default function MobileViewPage({
                   width: "6px",
                   height: "6px",
                   borderRadius: "50%",
-                  background: connected ? GREEN : "#f59e0b",
+                  background: connected ? GREEN : AMBER,
                   display: "inline-block",
                 }}
               />
@@ -472,7 +376,7 @@ export default function MobileViewPage({
         </button>
       </header>
 
-      {/* ===== 검색창 (고정) ===== */}
+      {/* ===== 대여/반납 모드 탭 + 검색창 (고정) ===== */}
       <div
         style={{
           position: "sticky",
@@ -483,29 +387,70 @@ export default function MobileViewPage({
           borderBottom: `1px solid ${BORDER}`,
         }}
       >
-        {/* 신규 대여/반납 등록 CTA (맨 위) */}
-        <button
-          className="mvp-btn"
-          onClick={openRegister}
+        <div
           style={{
-            width: "100%",
-            background: "linear-gradient(135deg, #4f46e5 0%, #6366f1 100%)",
-            color: "#ffffff",
-            borderRadius: "14px",
-            padding: "13px 16px",
-            fontSize: "14px",
-            fontWeight: 800,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
             gap: "8px",
-            boxShadow: "0 8px 18px rgba(79,70,229,0.35)",
+            background: isLightMode ? "#f1f5f9" : "#111827",
+            padding: "4px",
+            borderRadius: "14px",
             marginBottom: "10px",
           }}
         >
-          <ClipboardPlus size={17} />
-          신규 대여/반납 등록
-        </button>
+          <button
+            className="mvp-btn"
+            onClick={() => switchMode("대여")}
+            style={{
+              padding: "13px",
+              borderRadius: "11px",
+              fontSize: "14.5px",
+              fontWeight: 800,
+              background: mode === "대여" ? ACCENT : "transparent",
+              color: mode === "대여" ? "#ffffff" : TEXT_DIM,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "6px",
+              boxShadow: mode === "대여" ? "0 6px 14px rgba(79,70,229,0.3)" : "none",
+            }}
+          >
+            📥 대여
+          </button>
+          <button
+            className="mvp-btn"
+            onClick={() => switchMode("반납")}
+            style={{
+              padding: "13px",
+              borderRadius: "11px",
+              fontSize: "14.5px",
+              fontWeight: 800,
+              background: mode === "반납" ? GREEN : "transparent",
+              color: mode === "반납" ? "#ffffff" : TEXT_DIM,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "6px",
+              boxShadow: mode === "반납" ? "0 6px 14px rgba(16,185,129,0.3)" : "none",
+            }}
+          >
+            🔄 반납
+            {outstandingRentals.length > 0 && (
+              <span
+                style={{
+                  background: mode === "반납" ? "rgba(255,255,255,0.25)" : DANGER,
+                  color: "#ffffff",
+                  fontSize: "10.5px",
+                  fontWeight: 800,
+                  borderRadius: "999px",
+                  padding: "1px 7px",
+                }}
+              >
+                {outstandingRentals.length}
+              </span>
+            )}
+          </button>
+        </div>
 
         <div style={{ position: "relative" }}>
           <Search
@@ -516,7 +461,7 @@ export default function MobileViewPage({
             className="mvp-input"
             type="text"
             inputMode="search"
-            placeholder="품목명, 위치, 규격으로 검색"
+            placeholder={mode === "대여" ? "품목명, 위치, 규격으로 검색" : "품목명, 위치, 대여자 이름으로 검색"}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             style={{
@@ -553,37 +498,149 @@ export default function MobileViewPage({
           )}
         </div>
         <div style={{ fontSize: "11px", color: TEXT_DIM, marginTop: "8px", fontWeight: 600 }}>
-          총 {filteredItems.length}개 품목
+          {mode === "대여" ? `총 ${filteredInventory.length}개 품목` : `미반납 ${filteredOutstanding.length}건`}
         </div>
       </div>
 
-      {/* ===== 아이템 리스트 ===== */}
+      {/* ===== 리스트 ===== */}
       <main style={{ flex: 1, padding: "10px 14px 24px", display: "flex", flexDirection: "column", gap: "10px" }}>
-        {filteredItems.length === 0 ? (
-          <div
-            style={{
-              marginTop: "40px",
-              textAlign: "center",
-              color: TEXT_DIM,
-              fontSize: "13px",
-            }}
-          >
-            <Package size={36} style={{ margin: "0 auto 10px", opacity: 0.4 }} />
-            검색 결과가 없습니다.
+        {mode === "대여" ? (
+          filteredInventory.length === 0 ? (
+            <div style={{ marginTop: "40px", textAlign: "center", color: TEXT_DIM, fontSize: "13px" }}>
+              <Package size={36} style={{ margin: "0 auto 10px", opacity: 0.4 }} />
+              검색 결과가 없습니다.
+            </div>
+          ) : (
+            filteredInventory.map((item, idx) => {
+              const hasImage = !!item.photo;
+              const imageUrl = hasImage ? getGoogleDriveImageUrl(item.photo) : "";
+              const stockLabel = item.stock === null || item.stock === "N/A" ? "N/A" : `${item.stock}개`;
+              const stockColor =
+                item.stock === null || item.stock === "N/A"
+                  ? TEXT_DIM
+                  : item.stock === 0
+                  ? DANGER
+                  : GREEN;
+
+              return (
+                <div
+                  key={`${item.rowIndex}-${idx}`}
+                  className="mvp-card"
+                  onClick={() => openItemDetail(item)}
+                  style={{
+                    background: CARD_BG,
+                    border: `1px solid ${BORDER}`,
+                    borderRadius: "16px",
+                    padding: "10px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "12px",
+                    cursor: "pointer",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: "54px",
+                      height: "54px",
+                      borderRadius: "12px",
+                      overflow: "hidden",
+                      flexShrink: 0,
+                      background: isLightMode ? "#f1f5f9" : "#0f172a",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    {hasImage ? (
+                      <img
+                        src={imageUrl}
+                        alt={item.name}
+                        referrerPolicy="no-referrer"
+                        style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                        onError={(e) => {
+                          (e.currentTarget as HTMLImageElement).style.display = "none";
+                        }}
+                      />
+                    ) : (
+                      <Package size={20} color={TEXT_DIM} />
+                    )}
+                  </div>
+
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontSize: "13.5px",
+                        fontWeight: 800,
+                        color: TEXT_MAIN,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {item.name || "(이름 없음)"}
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "4px",
+                        fontSize: "11px",
+                        color: TEXT_DIM,
+                        marginTop: "3px",
+                      }}
+                    >
+                      <MapPin size={10} />
+                      <span className="mono">{item.location || "위치 미지정"}</span>
+                      {item.spec && (
+                        <>
+                          <span>·</span>
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {item.spec}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "4px", flexShrink: 0 }}>
+                    <span
+                      className="mono"
+                      style={{
+                        fontSize: "12px",
+                        fontWeight: 800,
+                        color: stockColor,
+                        background:
+                          item.stock === 0 ? "rgba(239,68,68,0.1)" : item.stock === null || item.stock === "N/A" ? "transparent" : "rgba(16,185,129,0.1)",
+                        padding: "3px 8px",
+                        borderRadius: "999px",
+                      }}
+                    >
+                      {stockLabel}
+                    </span>
+                    <ChevronRight size={16} color={TEXT_DIM} />
+                  </div>
+                </div>
+              );
+            })
+          )
+        ) : filteredOutstanding.length === 0 ? (
+          <div style={{ marginTop: "40px", textAlign: "center", color: TEXT_DIM, fontSize: "13px" }}>
+            <Check size={36} style={{ margin: "0 auto 10px", opacity: 0.4 }} />
+            {searchQuery ? "검색 결과가 없습니다." : "현재 반납할 물품이 없습니다."}
           </div>
         ) : (
-          filteredItems.map((item, idx) => {
-            const hasImage = !!item.photo;
-            const imageUrl = hasImage ? getGoogleDriveImageUrl(item.photo) : "";
-            const stockLabel = item.stock === null ? "N/A" : `${item.stock}개`;
-            const stockColor =
-              item.stock === null ? TEXT_DIM : item.stock === 0 ? DANGER : GREEN;
+          filteredOutstanding.map((o) => {
+            const matched = inventory.find(
+              (inv) => (inv.name || "").trim() === o.name && (inv.location || "").trim() === o.location
+            );
+            const hasImage = !!matched?.photo;
+            const imageUrl = hasImage ? getGoogleDriveImageUrl(matched!.photo) : "";
 
             return (
               <div
-                key={`${item.rowIndex}-${idx}`}
+                key={o.key}
                 className="mvp-card"
-                onClick={() => openDetail(item)}
+                onClick={() => openReturnDetail(o)}
                 style={{
                   background: CARD_BG,
                   border: `1px solid ${BORDER}`,
@@ -611,7 +668,7 @@ export default function MobileViewPage({
                   {hasImage ? (
                     <img
                       src={imageUrl}
-                      alt={item.name}
+                      alt={o.name}
                       referrerPolicy="no-referrer"
                       style={{ width: "100%", height: "100%", objectFit: "cover" }}
                       onError={(e) => {
@@ -634,34 +691,14 @@ export default function MobileViewPage({
                       whiteSpace: "nowrap",
                     }}
                   >
-                    {item.name || "(이름 없음)"}
+                    {o.name}
                   </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "4px",
-                      fontSize: "11px",
-                      color: TEXT_DIM,
-                      marginTop: "3px",
-                    }}
-                  >
+                  <div style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "11px", color: TEXT_DIM, marginTop: "3px" }}>
                     <MapPin size={10} />
-                    <span className="mono">{item.location || "위치 미지정"}</span>
-                    {item.spec && (
-                      <>
-                        <span>·</span>
-                        <span
-                          style={{
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {item.spec}
-                        </span>
-                      </>
-                    )}
+                    <span className="mono">{o.location || "위치 미지정"}</span>
+                    <span>·</span>
+                    <User size={10} />
+                    <span>{o.user || "이름 미상"}</span>
                   </div>
                 </div>
 
@@ -671,13 +708,13 @@ export default function MobileViewPage({
                     style={{
                       fontSize: "12px",
                       fontWeight: 800,
-                      color: stockColor,
-                      background: item.stock === 0 ? "rgba(239,68,68,0.1)" : item.stock === null ? "transparent" : "rgba(16,185,129,0.1)",
+                      color: AMBER,
+                      background: "rgba(245,158,11,0.12)",
                       padding: "3px 8px",
                       borderRadius: "999px",
                     }}
                   >
-                    {stockLabel}
+                    미반납 {o.qty}개
                   </span>
                   <ChevronRight size={16} color={TEXT_DIM} />
                 </div>
@@ -687,8 +724,8 @@ export default function MobileViewPage({
         )}
       </main>
 
-      {/* ===== 상세/등록/신청 바텀시트 ===== */}
-      {sheetMode && (sheetMode === "register" || selectedItem) && (
+      {/* ===== 상세/신청 바텀시트 ===== */}
+      {sheetMode && selectedItem && (
         <div
           style={{
             position: "fixed",
@@ -699,18 +736,11 @@ export default function MobileViewPage({
             animation: "mvpFadeIn 0.15s ease-out",
           }}
         >
-          {/* 배경 오버레이 */}
           <div
             onClick={closeSheet}
-            style={{
-              position: "absolute",
-              inset: 0,
-              background: "rgba(2, 6, 17, 0.6)",
-              backdropFilter: "blur(2px)",
-            }}
+            style={{ position: "absolute", inset: 0, background: "rgba(2, 6, 17, 0.6)", backdropFilter: "blur(2px)" }}
           />
 
-          {/* 시트 본체 */}
           <div
             style={{
               position: "relative",
@@ -726,7 +756,6 @@ export default function MobileViewPage({
               overflow: "hidden",
             }}
           >
-            {/* 손잡이 바 */}
             <div style={{ display: "flex", justifyContent: "center", padding: "10px 0 4px" }}>
               <div style={{ width: "36px", height: "4px", borderRadius: "999px", background: BORDER }} />
             </div>
@@ -765,7 +794,6 @@ export default function MobileViewPage({
                     )}
                   </div>
 
-                  {/* 이름 & 정보 */}
                   <h2 style={{ fontSize: "19px", fontWeight: 800, color: TEXT_MAIN, marginBottom: "6px" }}>
                     {selectedItem.name || "(이름 없음)"}
                   </h2>
@@ -788,37 +816,94 @@ export default function MobileViewPage({
                       <MapPin size={11} />
                       {selectedItem.location || "위치 미지정"}
                     </span>
-                    {selectedItem.spec && (
-                      <span
-                        style={{
-                          fontSize: "11.5px",
-                          fontWeight: 700,
-                          color: TEXT_DIM,
-                          background: isLightMode ? "#f1f5f9" : "#1e293b",
-                          padding: "4px 10px",
-                          borderRadius: "999px",
-                        }}
-                      >
-                        {selectedItem.spec}
-                      </span>
+
+                    {mode === "대여" ? (
+                      <>
+                        {selectedItem.spec && (
+                          <span
+                            style={{
+                              fontSize: "11.5px",
+                              fontWeight: 700,
+                              color: TEXT_DIM,
+                              background: isLightMode ? "#f1f5f9" : "#1e293b",
+                              padding: "4px 10px",
+                              borderRadius: "999px",
+                            }}
+                          >
+                            {selectedItem.spec}
+                          </span>
+                        )}
+                        <span
+                          style={{
+                            fontSize: "11.5px",
+                            fontWeight: 800,
+                            color:
+                              selectedItem.stock === null || selectedItem.stock === "N/A"
+                                ? TEXT_DIM
+                                : selectedItem.stock === 0
+                                ? DANGER
+                                : GREEN,
+                            background: selectedItem.stock === 0 ? "rgba(239,68,68,0.1)" : "rgba(16,185,129,0.1)",
+                            padding: "4px 10px",
+                            borderRadius: "999px",
+                          }}
+                        >
+                          현재고: {selectedItem.stock === null || selectedItem.stock === "N/A" ? "N/A" : `${selectedItem.stock}개`}
+                        </span>
+                      </>
+                    ) : (
+                      outstandingContext && (
+                        <>
+                          <span
+                            style={{
+                              fontSize: "11.5px",
+                              fontWeight: 700,
+                              color: TEXT_DIM,
+                              background: isLightMode ? "#f1f5f9" : "#1e293b",
+                              padding: "4px 10px",
+                              borderRadius: "999px",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "4px",
+                            }}
+                          >
+                            <User size={11} />
+                            {outstandingContext.user || "이름 미상"}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: "11.5px",
+                              fontWeight: 800,
+                              color: AMBER,
+                              background: "rgba(245,158,11,0.12)",
+                              padding: "4px 10px",
+                              borderRadius: "999px",
+                            }}
+                          >
+                            미반납 수량: {outstandingContext.qty}개
+                          </span>
+                        </>
+                      )
                     )}
-                    <span
-                      style={{
-                        fontSize: "11.5px",
-                        fontWeight: 800,
-                        color:
-                          selectedItem.stock === null ? TEXT_DIM : selectedItem.stock === 0 ? DANGER : GREEN,
-                        background:
-                          selectedItem.stock === 0 ? "rgba(239,68,68,0.1)" : "rgba(16,185,129,0.1)",
-                        padding: "4px 10px",
-                        borderRadius: "999px",
-                      }}
-                    >
-                      현재고: {selectedItem.stock === null ? "N/A" : `${selectedItem.stock}개`}
-                    </span>
                   </div>
 
-                  {selectedItem.note && (
+                  {mode === "반납" && outstandingContext?.lastTimestamp && (
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "5px",
+                        fontSize: "11px",
+                        color: TEXT_DIM,
+                        marginBottom: "14px",
+                      }}
+                    >
+                      <Clock size={11} />
+                      최근 대여일시: {outstandingContext.lastTimestamp}
+                    </div>
+                  )}
+
+                  {mode === "대여" && selectedItem.note && (
                     <div
                       style={{
                         background: isLightMode ? "#f8fafc" : "#0f172a",
@@ -836,462 +921,25 @@ export default function MobileViewPage({
                     </div>
                   )}
 
-                  {selectedItem.manager && (
-                    <div style={{ fontSize: "11px", color: TEXT_DIM, marginBottom: "16px" }}>
-                      관리 담당자: <b style={{ color: TEXT_MAIN }}>{selectedItem.manager}</b>
-                      {selectedItem.updatedAt && <> · 최종수정 {selectedItem.updatedAt.split(" ")[0]}</>}
-                    </div>
-                  )}
-
-                  {/* 대여/반납 버튼 */}
-                  <div style={{ display: "flex", gap: "10px", marginTop: "6px" }}>
-                    <button
-                      className="mvp-btn"
-                      onClick={() => openForm("대여")}
-                      disabled={isRentDisabled(selectedItem)}
-                      style={{
-                        flex: 1,
-                        background: ACCENT,
-                        color: "#ffffff",
-                        borderRadius: "14px",
-                        padding: "14px",
-                        fontSize: "14.5px",
-                        fontWeight: 800,
-                        opacity: isRentDisabled(selectedItem) ? 0.4 : 1,
-                        cursor: isRentDisabled(selectedItem) ? "not-allowed" : "pointer",
-                        boxShadow: "0 6px 16px rgba(79,70,229,0.3)",
-                      }}
-                    >
-                      📥 대여하기
-                    </button>
-                    <button
-                      className="mvp-btn"
-                      onClick={() => openForm("반납")}
-                      style={{
-                        flex: 1,
-                        background: GREEN,
-                        color: "#ffffff",
-                        borderRadius: "14px",
-                        padding: "14px",
-                        fontSize: "14.5px",
-                        fontWeight: 800,
-                        boxShadow: "0 6px 16px rgba(16,185,129,0.3)",
-                      }}
-                    >
-                      🔄 반납하기
-                    </button>
-                  </div>
-                </>
-              ) : sheetMode === "register" ? (
-                <>
-                  {/* ===== 신규 대여/반납 등록 ===== */}
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "18px" }}>
-                    <h2 style={{ fontSize: "17px", fontWeight: 800, color: TEXT_MAIN, margin: 0 }}>
-                      📋 신규 대여/반납 등록
-                    </h2>
-                    <button
-                      className="mvp-btn"
-                      onClick={closeSheet}
-                      style={{
-                        width: "32px",
-                        height: "32px",
-                        borderRadius: "10px",
-                        background: isLightMode ? "#f1f5f9" : "#1e293b",
-                        color: TEXT_MAIN,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}
-                    >
-                      <X size={16} />
-                    </button>
-                  </div>
-
-                  {/* 구분 토글 */}
-                  <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "16px" }}>
-                    <label style={{ fontSize: "11.5px", fontWeight: 700, color: TEXT_DIM }}>구분</label>
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "1fr 1fr",
-                        gap: "8px",
-                        background: isLightMode ? "#f1f5f9" : "#0f172a",
-                        padding: "4px",
-                        borderRadius: "12px",
-                      }}
-                    >
-                      <button
-                        className="mvp-btn"
-                        onClick={() => setActionType("대여")}
-                        style={{
-                          padding: "11px",
-                          borderRadius: "9px",
-                          fontSize: "13.5px",
-                          fontWeight: 700,
-                          background: actionType === "대여" ? ACCENT : "transparent",
-                          color: actionType === "대여" ? "#ffffff" : TEXT_DIM,
-                        }}
-                      >
-                        📥 대여
-                      </button>
-                      <button
-                        className="mvp-btn"
-                        onClick={() => setActionType("반납")}
-                        style={{
-                          padding: "11px",
-                          borderRadius: "9px",
-                          fontSize: "13.5px",
-                          fontWeight: 700,
-                          background: actionType === "반납" ? GREEN : "transparent",
-                          color: actionType === "반납" ? "#ffffff" : TEXT_DIM,
-                        }}
-                      >
-                        🔄 반납
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* 기존 목록 / 직접 입력 전환 */}
-                  <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "8px" }}>
-                    <button
-                      className="mvp-btn"
-                      onClick={() => setIsCustomMode((v) => !v)}
-                      style={{
-                        background: "none",
-                        color: ACCENT_LIGHT,
-                        fontSize: "11.5px",
-                        fontWeight: 700,
-                        textDecoration: "underline",
-                        padding: 0,
-                      }}
-                    >
-                      {isCustomMode
-                        ? actionType === "반납"
-                          ? "🔍 반납 대기 목록에서 선택"
-                          : "🔍 기존 목록에서 선택"
-                        : actionType === "반납"
-                        ? "✏️ 목록에 없는 물품 직접 반납 등록"
-                        : "✏️ 리스트에 없는 새 물품 등록"}
-                    </button>
-                  </div>
-
-                  {isCustomMode ? (
-                    <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-                      <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                        <label style={{ fontSize: "11.5px", fontWeight: 700, color: TEXT_DIM }}>
-                          품목명 <span style={{ color: DANGER }}>*</span>
-                        </label>
-                        <input
-                          className="mvp-input"
-                          type="text"
-                          placeholder="예: 특수 고정용 고무 밴드"
-                          value={customName}
-                          onChange={(e) => setCustomName(e.target.value)}
-                          style={{
-                            width: "100%",
-                            background: INPUT_BG,
-                            border: `1px solid ${BORDER}`,
-                            borderRadius: "12px",
-                            padding: "13px 14px",
-                            color: TEXT_MAIN,
-                            fontSize: "15px",
-                            outline: "none",
-                          }}
-                        />
-                      </div>
-                      <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                        <label style={{ fontSize: "11.5px", fontWeight: 700, color: TEXT_DIM }}>보관 위치</label>
-                        <input
-                          className="mvp-input"
-                          type="text"
-                          placeholder="예: 기타"
-                          value={customLocation}
-                          onChange={(e) => setCustomLocation(e.target.value)}
-                          style={{
-                            width: "100%",
-                            background: INPUT_BG,
-                            border: `1px solid ${BORDER}`,
-                            borderRadius: "12px",
-                            padding: "13px 14px",
-                            color: TEXT_MAIN,
-                            fontSize: "14px",
-                            outline: "none",
-                          }}
-                        />
-                      </div>
-                      <button
-                        className="mvp-btn"
-                        onClick={confirmCustomItem}
-                        style={{
-                          width: "100%",
-                          background: actionType === "대여" ? ACCENT : GREEN,
-                          color: "#ffffff",
-                          borderRadius: "14px",
-                          padding: "14px",
-                          fontSize: "14.5px",
-                          fontWeight: 800,
-                          marginTop: "4px",
-                          boxShadow: `0 8px 20px ${actionType === "대여" ? "rgba(79,70,229,0.3)" : "rgba(16,185,129,0.3)"}`,
-                        }}
-                      >
-                        다음: 수량 · 이름 입력
-                      </button>
-                    </div>
-                  ) : actionType === "반납" ? (
-                    <>
-                      <div style={{ position: "relative", marginBottom: "10px" }}>
-                        <Search
-                          size={16}
-                          style={{ position: "absolute", left: "14px", top: "50%", transform: "translateY(-50%)", color: TEXT_DIM }}
-                        />
-                        <input
-                          className="mvp-input"
-                          type="text"
-                          inputMode="search"
-                          placeholder="품목명, 위치, 대여자명으로 검색"
-                          value={registerQuery}
-                          onChange={(e) => setRegisterQuery(e.target.value)}
-                          autoFocus
-                          style={{
-                            width: "100%",
-                            background: INPUT_BG,
-                            border: `1px solid ${BORDER}`,
-                            borderRadius: "12px",
-                            padding: "13px 14px 13px 38px",
-                            color: TEXT_MAIN,
-                            fontSize: "14px",
-                            outline: "none",
-                          }}
-                        />
-                      </div>
-
-                      <div style={{ fontSize: "11px", color: TEXT_DIM, marginBottom: "8px", fontWeight: 600 }}>
-                        현재 반납 처리가 되지 않은 물품입니다. 눌러서 바로 반납 처리하세요.
-                      </div>
-
-                      <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxHeight: "46vh", overflowY: "auto" }}>
-                        {registerFilteredOutstanding.length === 0 ? (
-                          <div
-                            style={{
-                              textAlign: "center",
-                              color: TEXT_DIM,
-                              fontSize: "12.5px",
-                              padding: "28px 0",
-                              display: "flex",
-                              flexDirection: "column",
-                              alignItems: "center",
-                              gap: "8px",
-                            }}
-                          >
-                            <PackageCheck size={28} style={{ opacity: 0.5 }} />
-                            반납 대기 중인 물품이 없습니다.
-                          </div>
-                        ) : (
-                          registerFilteredOutstanding.map((entry, idx) => (
-                            <div
-                              key={`out-${entry.timestamp}-${entry.name}-${idx}`}
-                              className="mvp-card"
-                              onClick={() => selectOutstandingRental(entry)}
-                              style={{
-                                background: isLightMode ? "#f8fafc" : "#0f172a",
-                                border: `1px solid ${BORDER}`,
-                                borderRadius: "14px",
-                                padding: "10px",
-                                display: "flex",
-                                alignItems: "center",
-                                gap: "10px",
-                                cursor: "pointer",
-                              }}
-                            >
-                              <div
-                                style={{
-                                  width: "36px",
-                                  height: "36px",
-                                  borderRadius: "10px",
-                                  background: "rgba(16,185,129,0.12)",
-                                  color: GREEN,
-                                  display: "flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  flexShrink: 0,
-                                }}
-                              >
-                                <Package size={16} />
-                              </div>
-                              <div style={{ flex: 1, minWidth: 0 }}>
-                                <div
-                                  style={{
-                                    fontSize: "13px",
-                                    fontWeight: 800,
-                                    color: TEXT_MAIN,
-                                    whiteSpace: "nowrap",
-                                    overflow: "hidden",
-                                    textOverflow: "ellipsis",
-                                  }}
-                                >
-                                  {entry.name || "(이름 없음)"}
-                                </div>
-                                <div
-                                  style={{
-                                    display: "flex",
-                                    alignItems: "center",
-                                    flexWrap: "wrap",
-                                    gap: "6px",
-                                    fontSize: "10.5px",
-                                    color: TEXT_DIM,
-                                    marginTop: "3px",
-                                  }}
-                                >
-                                  <span style={{ display: "inline-flex", alignItems: "center", gap: "2px" }}>
-                                    <User size={10} />
-                                    {entry.user || "이름 미상"}
-                                  </span>
-                                  <span>·</span>
-                                  <span className="mono" style={{ display: "inline-flex", alignItems: "center", gap: "2px" }}>
-                                    <MapPin size={10} />
-                                    {entry.location || "위치 미지정"}
-                                  </span>
-                                  <span>·</span>
-                                  <span style={{ display: "inline-flex", alignItems: "center", gap: "2px" }}>
-                                    <Clock size={10} />
-                                    {formatTimestampToMinutes(entry.timestamp)}
-                                  </span>
-                                </div>
-                              </div>
-                              <span
-                                className="mono"
-                                style={{
-                                  fontSize: "11px",
-                                  fontWeight: 800,
-                                  color: GREEN,
-                                  background: "rgba(16,185,129,0.1)",
-                                  padding: "3px 8px",
-                                  borderRadius: "999px",
-                                  flexShrink: 0,
-                                }}
-                              >
-                                미반납 {entry.remainingQty}개
-                              </span>
-                              <ChevronRight size={14} color={TEXT_DIM} style={{ flexShrink: 0 }} />
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div style={{ position: "relative", marginBottom: "10px" }}>
-                        <Search
-                          size={16}
-                          style={{ position: "absolute", left: "14px", top: "50%", transform: "translateY(-50%)", color: TEXT_DIM }}
-                        />
-                        <input
-                          className="mvp-input"
-                          type="text"
-                          inputMode="search"
-                          placeholder="품목명, 위치, 규격으로 검색"
-                          value={registerQuery}
-                          onChange={(e) => setRegisterQuery(e.target.value)}
-                          autoFocus
-                          style={{
-                            width: "100%",
-                            background: INPUT_BG,
-                            border: `1px solid ${BORDER}`,
-                            borderRadius: "12px",
-                            padding: "13px 14px 13px 38px",
-                            color: TEXT_MAIN,
-                            fontSize: "14px",
-                            outline: "none",
-                          }}
-                        />
-                      </div>
-
-                      <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxHeight: "46vh", overflowY: "auto" }}>
-                        {registerFilteredItems.length === 0 ? (
-                          <div style={{ textAlign: "center", color: TEXT_DIM, fontSize: "12.5px", padding: "24px 0" }}>
-                            검색 결과가 없습니다.
-                          </div>
-                        ) : (
-                          registerFilteredItems.map((item, idx) => {
-                            const hasImage = !!item.photo;
-                            const imageUrl = hasImage ? getGoogleDriveImageUrl(item.photo) : "";
-                            const stockLabel = item.stock === null ? "N/A" : `${item.stock}개`;
-                            const stockColor = item.stock === null ? TEXT_DIM : item.stock === 0 ? DANGER : GREEN;
-
-                            return (
-                              <div
-                                key={`reg-${item.rowIndex}-${idx}`}
-                                className="mvp-card"
-                                onClick={() => selectRegisterItem(item)}
-                                style={{
-                                  background: isLightMode ? "#f8fafc" : "#0f172a",
-                                  border: `1px solid ${BORDER}`,
-                                  borderRadius: "14px",
-                                  padding: "9px",
-                                  display: "flex",
-                                  alignItems: "center",
-                                  gap: "10px",
-                                  cursor: "pointer",
-                                }}
-                              >
-                                <div
-                                  style={{
-                                    width: "42px",
-                                    height: "42px",
-                                    borderRadius: "10px",
-                                    overflow: "hidden",
-                                    flexShrink: 0,
-                                    background: isLightMode ? "#e2e8f0" : "#1e293b",
-                                    display: "flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                  }}
-                                >
-                                  {hasImage ? (
-                                    <img
-                                      src={imageUrl}
-                                      alt={item.name}
-                                      referrerPolicy="no-referrer"
-                                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                                      onError={(e) => {
-                                        (e.currentTarget as HTMLImageElement).style.display = "none";
-                                      }}
-                                    />
-                                  ) : (
-                                    <Package size={16} color={TEXT_DIM} />
-                                  )}
-                                </div>
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                  <div
-                                    style={{
-                                      fontSize: "13px",
-                                      fontWeight: 800,
-                                      color: TEXT_MAIN,
-                                      whiteSpace: "nowrap",
-                                      overflow: "hidden",
-                                      textOverflow: "ellipsis",
-                                    }}
-                                  >
-                                    {item.name || "(이름 없음)"}
-                                  </div>
-                                  <div className="mono" style={{ fontSize: "10.5px", color: TEXT_DIM, marginTop: "2px" }}>
-                                    {item.location || "위치 미지정"}
-                                  </div>
-                                </div>
-                                <span
-                                  className="mono"
-                                  style={{ fontSize: "11px", fontWeight: 800, color: stockColor, flexShrink: 0 }}
-                                >
-                                  {stockLabel}
-                                </span>
-                                <ChevronRight size={14} color={TEXT_DIM} style={{ flexShrink: 0 }} />
-                              </div>
-                            );
-                          })
-                        )}
-                      </div>
-                    </>
-                  )}
+                  <button
+                    className="mvp-btn"
+                    onClick={openForm}
+                    disabled={mode === "대여" && isRentDisabled(selectedItem)}
+                    style={{
+                      width: "100%",
+                      background: MODE_COLOR,
+                      color: "#ffffff",
+                      borderRadius: "14px",
+                      padding: "14px",
+                      fontSize: "14.5px",
+                      fontWeight: 800,
+                      opacity: mode === "대여" && isRentDisabled(selectedItem) ? 0.4 : 1,
+                      cursor: mode === "대여" && isRentDisabled(selectedItem) ? "not-allowed" : "pointer",
+                      boxShadow: `0 6px 16px ${mode === "대여" ? "rgba(79,70,229,0.3)" : "rgba(16,185,129,0.3)"}`,
+                    }}
+                  >
+                    {mode === "대여" ? "📥 대여하기" : "🔄 반납하기"}
+                  </button>
                 </>
               ) : (
                 <>
@@ -1299,7 +947,7 @@ export default function MobileViewPage({
                   <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "16px" }}>
                     <button
                       className="mvp-btn"
-                      onClick={handleFormBack}
+                      onClick={backToDetail}
                       style={{
                         width: "32px",
                         height: "32px",
@@ -1313,15 +961,8 @@ export default function MobileViewPage({
                     >
                       <ArrowLeft size={16} />
                     </button>
-                    <h2
-                      style={{
-                        fontSize: "17px",
-                        fontWeight: 800,
-                        color: actionType === "대여" ? ACCENT_LIGHT : GREEN,
-                        margin: 0,
-                      }}
-                    >
-                      {actionType === "대여" ? "📥 물품 대여 신청" : "🔄 물품 반납 접수"}
+                    <h2 style={{ fontSize: "17px", fontWeight: 800, color: MODE_COLOR_LIGHT, margin: 0 }}>
+                      {mode === "대여" ? "📥 물품 대여 신청" : "🔄 물품 반납 접수"}
                     </h2>
                   </div>
 
@@ -1361,11 +1002,24 @@ export default function MobileViewPage({
                       </div>
                     )}
                     <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: "13px", fontWeight: 800, color: TEXT_MAIN, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      <div
+                        style={{
+                          fontSize: "13px",
+                          fontWeight: 800,
+                          color: TEXT_MAIN,
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
                         {selectedItem.name}
                       </div>
                       <div style={{ fontSize: "11px", color: TEXT_DIM }}>
-                        위치: {selectedItem.location} · 현재고: {selectedItem.stock === null ? "N/A" : `${selectedItem.stock}개`}
+                        {mode === "대여"
+                          ? `위치: ${selectedItem.location} · 현재고: ${
+                              selectedItem.stock === null || selectedItem.stock === "N/A" ? "N/A" : `${selectedItem.stock}개`
+                            }`
+                          : `위치: ${selectedItem.location} · 미반납: ${outstandingContext?.qty ?? formQty}개`}
                       </div>
                     </div>
                   </div>
@@ -1373,7 +1027,7 @@ export default function MobileViewPage({
                   <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
                     <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                       <label style={{ fontSize: "11.5px", fontWeight: 700, color: TEXT_DIM }}>
-                        {actionType === "대여" ? "대여자 이름" : "반납자 이름"} <span style={{ color: DANGER }}>*</span>
+                        {mode === "대여" ? "대여자 이름" : "반납자 이름"} <span style={{ color: DANGER }}>*</span>
                       </label>
                       <input
                         className="mvp-input"
@@ -1381,16 +1035,7 @@ export default function MobileViewPage({
                         placeholder="예: 홍길동"
                         value={formUser}
                         onChange={(e) => setFormUser(e.target.value)}
-                        style={{
-                          width: "100%",
-                          background: INPUT_BG,
-                          border: `1px solid ${BORDER}`,
-                          borderRadius: "12px",
-                          padding: "13px 14px",
-                          color: TEXT_MAIN,
-                          fontSize: "15px",
-                          outline: "none",
-                        }}
+                        style={inputBaseStyle}
                       />
                     </div>
 
@@ -1415,16 +1060,7 @@ export default function MobileViewPage({
                         >
                           <Minus size={18} />
                         </button>
-                        <div
-                          className="mono"
-                          style={{
-                            flex: 1,
-                            textAlign: "center",
-                            fontSize: "20px",
-                            fontWeight: 800,
-                            color: TEXT_MAIN,
-                          }}
-                        >
+                        <div className="mono" style={{ flex: 1, textAlign: "center", fontSize: "20px", fontWeight: 800, color: TEXT_MAIN }}>
                           {formQty}
                         </div>
                         <button
@@ -1445,32 +1081,21 @@ export default function MobileViewPage({
                         </button>
                       </div>
                       {maxQty !== undefined && formQty >= maxQty && (
-                        <span style={{ fontSize: "11px", color: "#f59e0b" }}>
-                          현재고({maxQty}개)까지 대여할 수 있습니다.
+                        <span style={{ fontSize: "11px", color: AMBER }}>
+                          {mode === "대여" ? `현재고(${maxQty}개)까지 대여할 수 있습니다.` : `미반납 수량(${maxQty}개)까지 반납할 수 있습니다.`}
                         </span>
                       )}
                     </div>
 
                     <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                      <label style={{ fontSize: "11.5px", fontWeight: 700, color: TEXT_DIM }}>
-                        메모 (선택)
-                      </label>
+                      <label style={{ fontSize: "11.5px", fontWeight: 700, color: TEXT_DIM }}>메모 (선택)</label>
                       <input
                         className="mvp-input"
                         type="text"
                         placeholder="예: 테스트 목적 대여"
                         value={formNote}
                         onChange={(e) => setFormNote(e.target.value)}
-                        style={{
-                          width: "100%",
-                          background: INPUT_BG,
-                          border: `1px solid ${BORDER}`,
-                          borderRadius: "12px",
-                          padding: "13px 14px",
-                          color: TEXT_MAIN,
-                          fontSize: "14px",
-                          outline: "none",
-                        }}
+                        style={{ ...inputBaseStyle, fontSize: "14px" }}
                       />
                     </div>
 
@@ -1480,7 +1105,7 @@ export default function MobileViewPage({
                       disabled={submitting}
                       style={{
                         width: "100%",
-                        background: actionType === "대여" ? ACCENT : GREEN,
+                        background: MODE_COLOR,
                         color: "#ffffff",
                         borderRadius: "14px",
                         padding: "15px",
@@ -1492,11 +1117,11 @@ export default function MobileViewPage({
                         justifyContent: "center",
                         gap: "6px",
                         marginTop: "4px",
-                        boxShadow: `0 8px 20px ${actionType === "대여" ? "rgba(79,70,229,0.3)" : "rgba(16,185,129,0.3)"}`,
+                        boxShadow: `0 8px 20px ${mode === "대여" ? "rgba(79,70,229,0.3)" : "rgba(16,185,129,0.3)"}`,
                       }}
                     >
                       <Check size={17} />
-                      {submitting ? "제출 중..." : actionType === "대여" ? "대여 신청 제출" : "반납 접수 제출"}
+                      {submitting ? "제출 중..." : mode === "대여" ? "대여 신청 제출" : "반납 접수 제출"}
                     </button>
                   </div>
                 </>
@@ -1559,8 +1184,7 @@ export default function MobileViewPage({
             left: "50%",
             transform: "translateX(-50%)",
             zIndex: 70,
-            background:
-              localToast.type === "ok" ? "#10b981" : localToast.type === "error" ? "#ef4444" : "#f59e0b",
+            background: localToast.type === "ok" ? "#10b981" : localToast.type === "error" ? "#ef4444" : "#f59e0b",
             color: "#ffffff",
             padding: "12px 20px",
             borderRadius: "999px",
