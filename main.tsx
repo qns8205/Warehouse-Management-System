@@ -107,16 +107,6 @@ function doPost(e) {
       updateInventoryItem(sheet, payload);
       return responseJSON({ success: true });
     }
-
-    if (action === "updateMultipleInventoryItems") {
-      const items = payload.items;
-      if (items && Array.isArray(items)) {
-        for (let i = 0; i < items.length; i++) {
-          updateInventoryItem(sheet, items[i]);
-        }
-      }
-      return responseJSON({ success: true });
-    }
     
     if (action === "deleteInventoryItem") {
       deleteInventoryItem(sheet, payload.rowIndex);
