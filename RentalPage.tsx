@@ -1,23 +1,17 @@
 import React, { useState, useEffect } from "react";
 import { InventoryItem, Rack } from "../types";
-import { parseLocation, hexToRgba, getGoogleDriveImageUrl } from "../utils/drive";
-import { Trash2, Edit3, Plus, ExternalLink, Image, Package } from "lucide-react";
+import { parseLocation } from "../utils/drive";
 
-interface SidePanelProps {
-  rack: Rack | undefined;
-  shelvesWithItems: { shelf: string; items: InventoryItem[] }[];
+interface ItemFormModalProps {
+  item: InventoryItem | null;
+  defaultRackId: string;
+  defaultLocation?: string | null;
+  defaultSpec?: string | null;
+  racks: Rack[];
+  onSave: (item: any) => void;
   onClose: () => void;
-  onUpdateRack: (fields: Partial<Rack>) => void;
-  onDeleteRack: () => void;
-  onEditItem: (item: InventoryItem) => void;
-  onAddItem: () => void;
-  onDeleteItem: (rowIndex: number) => void;
-  highlightShelf: string | null;
-  highlightedItemRowIndex?: number | null;
-  onChangeStock: (item: InventoryItem, delta: number) => void;
-  isAdmin?: boolean;
-  onRentItem?: (item: InventoryItem, actionType: "대여" | "반납") => void;
-  isLightMode?: boolean;
+  defaultManager?: string;
+  inventory: InventoryItem[];
 }
 
 const PANEL = "var(--panel-bg, #1e293b)";
@@ -25,882 +19,452 @@ const PANEL_BORDER = "var(--panel-border, #334155)";
 const TEXT_MAIN = "var(--text-main, #f1f5f9)";
 const TEXT_DIM = "var(--text-dim, #94a3b8)";
 const ACCENT = "#6366f1";
-const DANGER = "#f43f5e";
-const OK = "#10b981";
-const WARN = "#f59e0b";
+const ACCENT_SOFT = "#818cf8";
 
-const PALETTE = ["#9CAF97", "#8FA3B8", "#D4A98C", "#AFA3C4", "#C9A0A0", "#C4B89C", "#7FB0AC", "#B8A88F"];
-
-export default function SidePanel({
-  rack,
-  shelvesWithItems,
+export default function ItemFormModal({
+  item,
+  defaultRackId,
+  defaultLocation,
+  defaultSpec,
+  racks,
+  onSave,
   onClose,
-  onUpdateRack,
-  onDeleteRack,
-  onEditItem,
-  onAddItem,
-  onDeleteItem,
-  highlightShelf,
-  highlightedItemRowIndex = null,
-  onChangeStock,
-  isAdmin = false,
-  onRentItem,
-  isLightMode = false,
-}: SidePanelProps) {
-  const [nameInput, setNameInput] = useState("");
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [expandedShelves, setExpandedShelves] = useState<{ [key: string]: boolean }>({});
-  const [isSettingsExpanded, setIsSettingsExpanded] = useState(false);
-  const [zoomImageUrl, setZoomImageUrl] = useState<string | null>(null);
-  const [zoomImageName, setZoomImageName] = useState<string>("");
-  const [editingStockItemRowIndex, setEditingStockItemRowIndex] = useState<number | null>(null);
-  const [editingStockValue, setEditingStockValue] = useState<string>("");
+  defaultManager,
+  inventory,
+}: ItemFormModalProps) {
+  const parsedLoc = defaultLocation ? parseLocation(defaultLocation) : null;
+  const initialRack = item 
+    ? parseLocation(item.location).rack 
+    : (parsedLoc ? parsedLoc.rack : defaultRackId || (racks[0] && racks[0].id) || "");
+  const initialShelfPick = item
+    ? item.location
+    : (defaultLocation || "");
+  const initialNewShelfNum = item 
+    ? parseLocation(item.location).shelf 
+    : (parsedLoc ? parsedLoc.shelf : "");
 
-  const handleSaveStockInline = (item: InventoryItem) => {
-    setEditingStockItemRowIndex(null);
-    const parsed = parseInt(editingStockValue, 10);
-    if (isNaN(parsed) || parsed < 0) return;
-    const currentStock = typeof item.stock === "number" ? item.stock : 0;
-    const delta = parsed - currentStock;
-    if (delta !== 0) {
-      onChangeStock(item, delta);
-    }
-  };
+  const [form, setForm] = useState<Omit<InventoryItem, "rowIndex"> & { rowIndex?: number }>(
+    item
+      ? { ...item, manager: defaultManager || item.manager || "관리자" }
+      : {
+          location: "",
+          photo: "",
+          name: "",
+          link: "N/A",
+          stock: 0,
+          updatedAt: "",
+          manager: defaultManager || "관리자",
+          note: "",
+          spec: defaultSpec || "",
+        }
+  );
+
+  const [rackId, setRackId] = useState(initialRack);
+  const [shelfMode, setShelfMode] = useState<"existing" | "new">("existing");
+  const [shelfPick, setShelfPick] = useState(initialShelfPick);
+  const [newShelfNum, setNewShelfNum] = useState(initialNewShelfNum);
+
+  const currentRack = racks.find((r) => r.id === rackId);
+  const existingShelves = currentRack && currentRack.shelves ? currentRack.shelves : [];
 
   useEffect(() => {
-    if (rack) {
-      setNameInput(rack.name);
-      setConfirmDelete(false);
-      // Auto-expand all shelves when a new rack is selected
-      const initialExpanded: { [key: string]: boolean } = {};
-      shelvesWithItems.forEach((s) => {
-        initialExpanded[s.shelf] = true;
-      });
-      setExpandedShelves(initialExpanded);
+    if (existingShelves.length === 0) {
+      setShelfMode("new");
+    } else if (!item) {
+      setShelfMode("existing");
     }
-  }, [rack, shelvesWithItems.length]); // eslint-disable-line
+  }, [rackId]); // eslint-disable-line
 
-  useEffect(() => {
-    if (highlightShelf) {
-      setExpandedShelves((prev) => ({ ...prev, [highlightShelf]: true }));
-      // Wait a little for the side panel expansion to complete, then scroll smoothly
-      setTimeout(() => {
-        const element = document.getElementById(`shelf-container-${highlightShelf}`);
-        if (element) {
-          element.scrollIntoView({ behavior: "smooth", block: "center" });
-        }
-      }, 300);
-    }
-  }, [highlightShelf]);
-
-  useEffect(() => {
-    if (highlightedItemRowIndex !== null) {
-      // Find the shelf containing this item
-      let foundShelf: string | null = null;
-      for (const s of shelvesWithItems) {
-        if (s.items.some((it) => it.rowIndex === highlightedItemRowIndex)) {
-          foundShelf = s.shelf;
-          break;
-        }
-      }
-
-      if (foundShelf) {
-        // Expand the corresponding shelf
-        setExpandedShelves((prev) => ({ ...prev, [foundShelf!]: true }));
-      }
-
-      // Smooth scroll to the specific item card
-      setTimeout(() => {
-        const element = document.getElementById(`item-card-${highlightedItemRowIndex}`);
-        if (element) {
-          element.scrollIntoView({ behavior: "smooth", block: "center" });
-        }
-      }, 350);
-    }
-  }, [highlightedItemRowIndex, shelvesWithItems]);
-
-  if (!rack) {
-    return (
-      <aside
-        style={{
-          width: 350,
-          background: PANEL,
-          borderLeft: `1px solid ${PANEL_BORDER}`,
-          padding: 24,
-          flexShrink: 0,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          textAlign: "center",
-          gap: 12,
-        }}
-      >
-        <Package size={48} style={{ opacity: 0.2, color: TEXT_MAIN }} />
-        <div style={{ fontSize: 13, color: TEXT_DIM, lineHeight: 1.6 }}>
-          배치 지도에서 랙을 클릭하면
-          <br />
-          <b>상세 선반 단수 및 실시간 재고 정보</b>가
-          <br />
-          여기에 표시됩니다.
-        </div>
-      </aside>
-    );
+  function update(field: string, value: any) {
+    setForm((f) => ({ ...f, [field]: value }));
   }
 
-  const totalStock = shelvesWithItems.reduce(
-    (sum, s) => sum + s.items.reduce((isum, it) => isum + (typeof it.stock === "number" ? it.stock : 0), 0),
-    0
-  );
-  const totalItems = shelvesWithItems.reduce((sum, s) => sum + s.items.length, 0);
+  function composedLocation() {
+    if (shelfMode === "existing" && shelfPick) {
+      // Picked shelves already have format like "A-01"
+      return shelfPick;
+    }
+    if (shelfMode === "new" && newShelfNum.trim()) {
+      return `${rackId}-${newShelfNum.trim()}`;
+    }
+    return "";
+  }
 
-  const toggleShelf = (shelf: string) => {
-    setExpandedShelves((prev) => ({ ...prev, [shelf]: !prev[shelf] }));
-  };
+  const location = item ? form.location : composedLocation();
+  const canSave = location.trim() !== "" && form.name.trim() !== "";
+
+  const existingSubcategories = React.useMemo(() => {
+    if (!location || !inventory) return [];
+    const set = new Set<string>();
+    inventory.forEach((itm) => {
+      if (itm.location === location && itm.spec && itm.spec.trim() && itm.spec !== "기타") {
+        set.add(itm.spec.trim());
+      }
+    });
+    return Array.from(set).sort();
+  }, [location, inventory]);
+
+  const [subMode, setSubMode] = useState<"select" | "custom">("select");
+
+  useEffect(() => {
+    if (existingSubcategories.length === 0) {
+      setSubMode("custom");
+    } else {
+      setSubMode("select");
+    }
+  }, [existingSubcategories.length]);
 
   return (
-    <aside
+    <div
       style={{
-        width: 350,
-        background: PANEL,
-        borderLeft: `1px solid ${PANEL_BORDER}`,
-        flexShrink: 0,
+        position: "fixed",
+        inset: 0,
+        background: "rgba(10,10,11,0.7)",
         display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 50,
+        backdropFilter: "blur(2px)",
+      }}
+      onPointerDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
       }}
     >
-      {/* Rack Panel Header */}
       <div
+        className="item-modal"
         style={{
-          padding: "16px 18px",
-          borderBottom: `1px solid ${PANEL_BORDER}`,
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "flex-start",
+          width: 480,
+          maxWidth: "92vw",
+          maxHeight: "86vh",
+          overflowY: "auto",
+          background: PANEL,
+          border: `1px solid ${PANEL_BORDER}`,
+          borderRadius: 12,
+          padding: 24,
+          boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
         }}
       >
-        <div style={{ flex: 1 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-            <span
-              style={{
-                width: 10,
-                height: 10,
-                borderRadius: 2,
-                background: rack.color,
-                display: "inline-block",
-              }}
-            />
-            <span className="mono" style={{ fontSize: 11, color: TEXT_DIM }}>
-              {rack.id} 랙 구역
-            </span>
-          </div>
-          {isAdmin ? (
-            <input
-              className="mono"
-              value={nameInput}
-              onChange={(e) => setNameInput(e.target.value)}
-              onBlur={() => {
-                if (nameInput.trim() && nameInput !== rack.name) {
-                  onUpdateRack({ name: nameInput.trim() });
-                }
-              }}
-              style={{
-                width: "100%",
-                fontSize: 16,
-                fontWeight: 700,
-                padding: "5px 8px",
-                background: "var(--input-bg, #0f172a)",
-                border: `1px solid ${PANEL_BORDER}`,
-                borderRadius: 6,
-                color: TEXT_MAIN,
-              }}
-            />
-          ) : (
-            <div style={{ fontSize: 16, fontWeight: 700, color: TEXT_MAIN, padding: "5px 0" }}>
-              {rack.name || `${rack.id} 랙`}
-            </div>
-          )}
+        <style>{`
+          .item-modal input, .item-modal select, .item-modal textarea {
+            background: var(--input-bg, #0f172a) !important;
+            color: var(--text-main, #f1f5f9) !important;
+            border: 1px solid var(--panel-border, #334155) !important;
+            border-radius: 6px !important;
+            padding: 8px 12px !important;
+            font-size: 13px !important;
+            outline: none !important;
+            transition: border-color 0.15s ease-in-out !important;
+          }
+          .item-modal input:focus, .item-modal select:focus, .item-modal textarea:focus {
+            border-color: #6366f1 !important;
+            box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2) !important;
+          }
+        `}</style>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>{item ? "품목 수정" : "품목 추가"}</div>
+          <button onClick={onClose} style={{ background: "transparent", border: "none", color: TEXT_DIM, fontSize: 18, cursor: "pointer" }}>
+            ✕
+          </button>
         </div>
-        <button
-          onClick={onClose}
-          style={{
-            background: "transparent",
-            border: "none",
-            color: TEXT_DIM,
-            fontSize: 18,
-            cursor: "pointer",
-            padding: "0 4px",
-          }}
-        >
-          ✕
-        </button>
-      </div>
 
-      {/* Theme Color Settings Section Header */}
-      {isAdmin && (
-        <>
-          <div
-            onClick={() => setIsSettingsExpanded(!isSettingsExpanded)}
-            style={{
-              padding: "10px 18px",
-              borderBottom: `1px solid ${PANEL_BORDER}`,
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              cursor: "pointer",
-              background: "var(--input-bg, #0f172a)",
-              userSelect: "none"
-            }}
-          >
-            <span style={{ fontSize: "11px", fontWeight: 600, color: TEXT_DIM }}>
-              🎨 보관랙 테마 컬러 설정
-            </span>
-            <span style={{ fontSize: "11px", color: TEXT_DIM }}>{isSettingsExpanded ? "접기 ▲" : "펼치기 ▼"}</span>
-          </div>
-
-          {/* Theme Color Settings */}
-          {isSettingsExpanded && (
-            <div
-              style={{
-                padding: "14px 18px",
-                borderBottom: `1px solid ${PANEL_BORDER}`,
-                display: "flex",
-                flexDirection: "column",
-                gap: 10,
-              }}
-            >
-              <div style={{ fontSize: 11, color: TEXT_DIM, marginBottom: 2 }}>
-                보관 구역의 강조 테마 색상을 선택하세요.
-              </div>
-
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                {PALETTE.map((c) => (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {item ? (
+            <Field label="위치 (코드)">
+              <input
+                className="mono"
+                value={form.location}
+                onChange={(e) => update("location", e.target.value)}
+                style={{ width: "100%" }}
+              />
+            </Field>
+          ) : (
+            <>
+              <Field label="랙 구역 선택">
+                <select
+                  value={rackId}
+                  onChange={(e) => {
+                    setRackId(e.target.value);
+                    setShelfPick("");
+                  }}
+                  style={{ width: "100%", background: "#101114", color: TEXT_MAIN, border: `1px solid ${PANEL_BORDER}`, padding: "6px 10px", borderRadius: 6 }}
+                >
+                  {racks.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.id} 랙 ({r.name})
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="선반(Shelf) 위치">
+                <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
                   <button
-                    key={c}
-                    onClick={() => onUpdateRack({ color: c })}
+                    type="button"
+                    onClick={() => setShelfMode("existing")}
                     style={{
-                      width: 22,
-                      height: 22,
-                      borderRadius: 5,
-                      background: c,
-                      border: rack.color === c ? `2px solid ${TEXT_MAIN}` : "2px solid transparent",
-                      padding: 0,
+                      flex: 1,
+                      background: shelfMode === "existing" ? "rgba(168,166,160,0.12)" : "transparent",
+                      border: `1px solid ${shelfMode === "existing" ? ACCENT_SOFT : PANEL_BORDER}`,
+                      color: shelfMode === "existing" ? TEXT_MAIN : TEXT_DIM,
+                      borderRadius: 6,
+                      padding: "6px 8px",
+                      fontSize: 11.5,
                       cursor: "pointer",
                     }}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-        </>
-      )}
-
-      {/* Stock Items List by Shelf */}
-      <div
-        style={{
-          padding: "14px 18px 8px",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-        }}
-      >
-        <div style={{ fontSize: "12.5px", fontWeight: 600 }}>
-          선반별 품목 정보 <span style={{ color: TEXT_DIM }}>({totalItems}개 품목)</span>
-        </div>
-        {isAdmin && (
-          <button
-            onClick={onAddItem}
-            style={{
-              background: "transparent",
-              border: `1px solid ${ACCENT}`,
-              color: ACCENT,
-              fontSize: "11.5px",
-              padding: "4px 9px",
-              borderRadius: 5,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-            }}
-          >
-            <Plus size={13} />
-            품목 등록
-          </button>
-        )}
-      </div>
-
-      {/* Scrollable shelves */}
-      <div style={{ flex: 1, overflowY: "auto", padding: "0 18px 18px" }}>
-        {shelvesWithItems.length === 0 ? (
-          <div style={{ fontSize: "12.5px", color: TEXT_DIM, padding: "20px 0", textAlign: "center" }}>
-            이 랙에 등록된 선반/품목 데이터가 존재하지 않습니다. 우측 상단의 '품목 등록'을 눌러 새로 생성해보세요.
-          </div>
-        ) : (
-          shelvesWithItems.map(({ shelf, items }) => {
-            const shelfStock = items.reduce((s, it) => s + (typeof it.stock === "number" ? it.stock : 0), 0);
-            const isHighlighted = highlightShelf === shelf;
-            const isExpanded = !!expandedShelves[shelf];
-
-            return (
-              <div id={`shelf-container-${shelf}`} key={shelf} style={{ marginBottom: 12, position: "relative" }}>
-                {/* Shelf Title Button */}
-                <button
-                  onClick={() => toggleShelf(shelf)}
-                  style={{
-                    position: "sticky",
-                    top: 0,
-                    zIndex: 10,
-                    width: "100%",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    background: isHighlighted 
-                      ? "rgba(245, 158, 11, 0.95)" 
-                      : (isLightMode ? "rgba(241, 245, 249, 0.95)" : "rgba(30, 41, 59, 0.95)"),
-                    backdropFilter: "blur(4px)",
-                    border: `2px solid ${isHighlighted ? "#f59e0b" : hexToRgba(rack.color, 0.4)}`,
-                    boxShadow: isHighlighted ? "0 4px 12px rgba(245, 158, 11, 0.4)" : "0 2px 6px rgba(0, 0, 0, 0.08)",
-                    borderRadius: 6,
-                    padding: "8px 10px",
-                    marginBottom: 6,
-                    transition: "all 0.3s ease-in-out",
-                    cursor: "pointer",
-                  }}
-                >
-                  <span className="mono" style={{ fontSize: "12.5px", fontWeight: 700, color: isHighlighted ? "#ffffff" : (isLightMode ? "#0f172a" : TEXT_MAIN) }}>
-                    {isHighlighted ? `🔍 ${shelf} (검색됨)` : shelf}
-                  </span>
-                  <span style={{ fontSize: "11px", color: isHighlighted ? "#ffffff" : TEXT_DIM, display: "flex", alignItems: "center", gap: 4 }}>
-                    {items.length}개 품목 {isExpanded ? "▲" : "▼"}
-                  </span>
-                </button>
-
-                {/* Shelf Items List */}
-                {isExpanded && (
-                  <div style={{ paddingLeft: 4, display: "flex", flexDirection: "column", gap: 8 }}>
-                    {items.map((item) => {
-                      const hasImage = !!item.photo;
-                      const imageUrl = hasImage ? getGoogleDriveImageUrl(item.photo) : "";
-                      const isItemHighlighted = highlightedItemRowIndex === item.rowIndex;
-
-                      return (
-                        <div
-                          id={`item-card-${item.rowIndex}`}
-                          key={item.rowIndex}
-                          style={{
-                            background: isItemHighlighted ? "rgba(245, 158, 11, 0.12)" : "var(--input-bg, #0f172a)",
-                            border: isItemHighlighted ? "2px solid #f59e0b" : `1px solid ${PANEL_BORDER}`,
-                            boxShadow: isItemHighlighted ? "0 0 14px rgba(245, 158, 11, 0.45)" : "none",
-                            borderRadius: 8,
-                            padding: "10px 12px",
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: 8,
-                            transition: "all 0.3s ease-in-out",
-                          }}
-                        >
-                          {/* Photo and basic info row */}
-                          <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-                            {/* Image Visualizer */}
-                            <div
-                              onClick={() => {
-                                if (hasImage) {
-                                  setZoomImageUrl(imageUrl);
-                                  setZoomImageName(item.name || "(이름 없음)");
-                                }
-                              }}
-                              title={hasImage ? "클릭하여 사진 확대" : undefined}
-                              style={{
-                                width: 56,
-                                height: 56,
-                                background: "var(--app-bg, #1b1c21)",
-                                border: `1px solid ${PANEL_BORDER}`,
-                                borderRadius: 6,
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                overflow: "hidden",
-                                flexShrink: 0,
-                                position: "relative",
-                                cursor: hasImage ? "pointer" : "default",
-                              }}
-                            >
-                              {hasImage ? (
-                                <img
-                                  src={imageUrl}
-                                  alt={item.name}
-                                  referrerPolicy="no-referrer"
-                                  style={{
-                                    width: "100%",
-                                    height: "100%",
-                                    objectFit: "cover",
-                                  }}
-                                  onError={(e) => {
-                                    // Fallback to placeholder if image load fails (e.g. invalid url/permissions)
-                                    (e.target as HTMLElement).style.display = "none";
-                                    const sibling = (e.target as HTMLElement).nextElementSibling;
-                                    if (sibling) (sibling as HTMLElement).style.display = "flex";
-                                  }}
-                                />
-                              ) : null}
-                              <div
-                                style={{
-                                  display: hasImage ? "none" : "flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  width: "100%",
-                                  height: "100%",
-                                }}
-                              >
-                                <Image size={18} style={{ color: TEXT_DIM }} />
-                              </div>
-                            </div>
-
-                            {/* Item name, note (Column H), and links */}
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div
-                                style={{
-                                  fontSize: "13px",
-                                  fontWeight: 600,
-                                  color: TEXT_MAIN,
-                                  whiteSpace: "nowrap",
-                                  overflow: "hidden",
-                                  textOverflow: "ellipsis",
-                                }}
-                                title={item.name}
-                              >
-                                {item.name || "(이름 없음)"}
-                              </div>
-
-                              {/* Column H note display */}
-                              <div style={{ display: "block", marginTop: 4 }}>
-                                {item.note ? (
-                                  <div
-                                    style={{
-                                      fontSize: "11.5px",
-                                      fontWeight: 500,
-                                      color: TEXT_MAIN,
-                                      background: "rgba(245, 158, 11, 0.08)",
-                                      border: "1px solid rgba(245, 158, 11, 0.2)",
-                                      padding: "3px 8px",
-                                      borderRadius: 5,
-                                      display: "inline-block",
-                                      maxWidth: "100%",
-                                      wordBreak: "break-all",
-                                    }}
-                                    title={`특이사항: ${item.note}`}
-                                  >
-                                    📝 {item.note}
-                                  </div>
-                                ) : (
-                                  <div style={{ fontSize: "10.5px", color: TEXT_DIM, fontStyle: "italic" }}>
-                                    특이사항 없음
-                                  </div>
-                                )}
-                              </div>
-
-                              {item.link && item.link !== "N/A" ? (
-                                <div style={{ display: "block", marginTop: 6 }}>
-                                  <a
-                                    href={item.link}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    style={{
-                                      fontSize: "10.5px",
-                                      color: ACCENT,
-                                      display: "inline-flex",
-                                      alignItems: "center",
-                                      gap: 3,
-                                      textDecoration: "none",
-                                    }}
-                                  >
-                                    구매 링크
-                                    <ExternalLink size={10} />
-                                  </a>
-                                </div>
-                              ) : null}
-                            </div>
-                          </div>
-
-                          {/* Footer action row: +/- adjustments or 대여/반납 buttons */}
-                          <div
-                            style={{
-                              display: "flex",
-                              flexDirection: "column",
-                              gap: 6,
-                              borderTop: `1px solid ${PANEL_BORDER}`,
-                              paddingTop: 8,
-                              marginTop: 2,
-                            }}
-                          >
-                            {isAdmin ? (
-                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                                {/* Stock modifier buttons */}
-                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                  <button
-                                    onClick={() => onChangeStock(item, -1)}
-                                    disabled={typeof item.stock !== "number" || item.stock <= 0}
-                                    style={{
-                                      ...stepBtnStyle,
-                                      opacity: typeof item.stock !== "number" || item.stock <= 0 ? 0.35 : 1,
-                                      cursor: typeof item.stock !== "number" || item.stock <= 0 ? "not-allowed" : "pointer",
-                                    }}
-                                  >
-                                    −
-                                  </button>
-                                  {editingStockItemRowIndex === item.rowIndex ? (
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      value={editingStockValue}
-                                      onChange={(e) => setEditingStockValue(e.target.value)}
-                                      onBlur={() => handleSaveStockInline(item)}
-                                      onKeyDown={(e) => {
-                                        if (e.key === "Enter") {
-                                          handleSaveStockInline(item);
-                                        } else if (e.key === "Escape") {
-                                          setEditingStockItemRowIndex(null);
-                                        }
-                                      }}
-                                      autoFocus
-                                      style={{
-                                        width: "48px",
-                                        background: isLightMode ? "#ffffff" : "#020617",
-                                        border: `1.5px solid ${ACCENT}`,
-                                        borderRadius: "4px",
-                                        color: isLightMode ? "#0f172a" : "#ffffff",
-                                        textAlign: "center",
-                                        fontSize: "12px",
-                                        fontWeight: 700,
-                                        outline: "none",
-                                        padding: "1px 2px",
-                                      }}
-                                    />
-                                  ) : (
-                                    <span
-                                      className="mono"
-                                      onClick={() => {
-                                        if (typeof item.stock === "number") {
-                                          setEditingStockItemRowIndex(item.rowIndex);
-                                          setEditingStockValue(String(item.stock));
-                                        }
-                                      }}
-                                      title={typeof item.stock === "number" ? "수량 직접 입력하려면 클릭" : "N/A 수량은 직접 수정할 수 없습니다."}
-                                      style={{
-                                        fontSize: "12.5px",
-                                        fontWeight: 700,
-                                        minWidth: 26,
-                                        textAlign: "center",
-                                        color: item.stock === 0 ? DANGER : (item.stock === null || item.stock === "N/A") ? TEXT_DIM : OK,
-                                        cursor: typeof item.stock === "number" ? "pointer" : "default",
-                                        padding: "2px 6px",
-                                        borderRadius: "4px",
-                                        background: isLightMode ? "rgba(0,0,0,0.03)" : "rgba(255,255,255,0.05)",
-                                        border: "1px solid transparent",
-                                        transition: "all 0.15s",
-                                      }}
-                                      onMouseEnter={(e) => {
-                                        if (typeof item.stock === "number") {
-                                          e.currentTarget.style.border = `1px dashed ${ACCENT}`;
-                                          e.currentTarget.style.background = isLightMode ? "rgba(99, 102, 241, 0.08)" : "rgba(99, 102, 241, 0.15)";
-                                        }
-                                      }}
-                                      onMouseLeave={(e) => {
-                                        e.currentTarget.style.border = "1px solid transparent";
-                                        e.currentTarget.style.background = isLightMode ? "rgba(0,0,0,0.03)" : "rgba(255,255,255,0.05)";
-                                      }}
-                                    >
-                                      {item.stock === null || item.stock === "N/A" ? "N/A" : item.stock}
-                                    </span>
-                                  )}
-                                  <button
-                                    onClick={() => onChangeStock(item, 1)}
-                                    disabled={typeof item.stock !== "number"}
-                                    style={{
-                                      ...stepBtnStyle,
-                                      opacity: typeof item.stock !== "number" ? 0.35 : 1,
-                                      cursor: typeof item.stock !== "number" ? "not-allowed" : "pointer",
-                                    }}
-                                  >
-                                    +
-                                  </button>
-                                </div>
-
-                                {/* Manager/Date and buttons */}
-                                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-                                    <span style={{ fontSize: "10px", color: TEXT_DIM }}>
-                                      {item.manager || "담당자 없음"}
-                                    </span>
-                                    <span style={{ fontSize: "9px", color: TEXT_DIM, marginTop: 1 }}>
-                                      {item.updatedAt ? item.updatedAt.split(" ")[0] : ""}
-                                    </span>
-                                  </div>
-                                  <div style={{ display: "flex", gap: 6 }}>
-                                    <button
-                                      onClick={() => onEditItem(item)}
-                                      title="수정"
-                                      style={{
-                                        background: "transparent",
-                                        border: "none",
-                                        color: TEXT_DIM,
-                                        cursor: "pointer",
-                                        padding: 2,
-                                      }}
-                                    >
-                                      <Edit3 size={12} />
-                                    </button>
-                                    <button
-                                      onClick={() => onDeleteItem(item.rowIndex)}
-                                      title="삭제"
-                                      style={{
-                                        background: "transparent",
-                                        border: "none",
-                                        color: DANGER,
-                                        cursor: "pointer",
-                                        padding: 2,
-                                      }}
-                                    >
-                                      <Trash2 size={12} />
-                                    </button>
-                                  </div>
-                                </div>
-                              </div>
-                            ) : (
-                              <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
-                                {/* Stock count display */}
-                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                                  <div style={{ fontSize: "11.5px", color: TEXT_DIM }}>
-                                    현재고: <span className="mono" style={{ fontSize: "13px", fontWeight: 700, color: item.stock === 0 ? DANGER : OK }}>
-                                      {item.stock === null ? "N/A" : `${item.stock} 개`}
-                                    </span>
-                                  </div>
-                                  <span style={{ fontSize: "10px", color: TEXT_DIM }}>
-                                    최종수정: {item.updatedAt ? item.updatedAt.split(" ")[0] : "없음"}
-                                  </span>
-                                </div>
-                                {/* Borrow and Return buttons */}
-                                <div style={{ display: "flex", gap: 6, width: "100%" }}>
-                                  <button
-                                    onClick={() => onRentItem?.(item, "대여")}
-                                    disabled={item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)}
-                                    style={{
-                                      flex: 1,
-                                      background: "rgba(99, 102, 241, 0.12)",
-                                      border: `1px solid ${ACCENT}`,
-                                      color: ACCENT,
-                                      borderRadius: "6px",
-                                      padding: "6px 8px",
-                                      fontSize: "11.5px",
-                                      fontWeight: 700,
-                                      cursor: (item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)) ? "not-allowed" : "pointer",
-                                      opacity: (item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)) ? 0.4 : 1,
-                                      display: "flex",
-                                      alignItems: "center",
-                                      justifyContent: "center",
-                                      gap: 4,
-                                    }}
-                                  >
-                                    📦 대여하기
-                                  </button>
-                                  <button
-                                    onClick={() => onRentItem?.(item, "반납")}
-                                    style={{
-                                      flex: 1,
-                                      background: "rgba(16, 185, 129, 0.12)",
-                                      border: `1px solid ${OK}`,
-                                      color: OK,
-                                      borderRadius: "6px",
-                                      padding: "6px 8px",
-                                      fontSize: "11.5px",
-                                      fontWeight: 700,
-                                      cursor: "pointer",
-                                      display: "flex",
-                                      alignItems: "center",
-                                      justifyContent: "center",
-                                      gap: 4,
-                                    }}
-                                  >
-                                    🔄 반납하기
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
+                  >
+                    기존 선반 위치에 추가
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShelfMode("new")}
+                    style={{
+                      flex: 1,
+                      background: shelfMode === "new" ? "rgba(168,166,160,0.12)" : "transparent",
+                      border: `1px solid ${shelfMode === "new" ? ACCENT_SOFT : PANEL_BORDER}`,
+                      color: shelfMode === "new" ? TEXT_MAIN : TEXT_DIM,
+                      borderRadius: 6,
+                      padding: "6px 8px",
+                      fontSize: 11.5,
+                      cursor: "pointer",
+                    }}
+                  >
+                    새 선반 위치 만들기
+                  </button>
+                </div>
+                {shelfMode === "existing" ? (
+                  existingShelves.length > 0 ? (
+                    <select
+                      value={shelfPick}
+                      onChange={(e) => setShelfPick(e.target.value)}
+                      style={{ width: "100%", background: "#101114", color: TEXT_MAIN, border: `1px solid ${PANEL_BORDER}`, padding: "6px 10px", borderRadius: 6 }}
+                    >
+                      <option value="">선반을 선택하세요</option>
+                      {existingShelves.map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div style={{ fontSize: 12, color: TEXT_DIM }}>
+                      이 랙에는 아직 활성 선반 위치가 없습니다. "새 선반 위치 만들기"를 진행해주세요.
+                    </div>
+                  )
+                ) : (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span className="mono" style={{ fontSize: 13, color: TEXT_DIM }}>
+                      {rackId}-
+                    </span>
+                    <input
+                      value={newShelfNum}
+                      onChange={(e) => setNewShelfNum(e.target.value)}
+                      placeholder="예: 05"
+                      style={{ flex: 1 }}
+                    />
                   </div>
                 )}
-              </div>
-            );
-          })
-        )}
-      </div>
-
-      {/* Rack Delete Action at Bottom */}
-      {isAdmin && (
-        <div style={{ padding: 18, borderTop: `1px solid ${PANEL_BORDER}` }}>
-          {confirmDelete ? (
-            <div style={{ display: "flex", gap: 8 }}>
-              <button
-                onClick={onDeleteRack}
-                style={{
-                  ...actionBtnStyle,
-                  flex: 1,
-                  background: DANGER,
-                  borderColor: DANGER,
-                  color: "#15161A",
-                  cursor: "pointer",
-                }}
-              >
-                삭제 확인
-              </button>
-              <button
-                onClick={() => setConfirmDelete(false)}
-                style={{ ...actionBtnStyle, flex: 1, cursor: "pointer" }}
-              >
-                취소
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={() => setConfirmDelete(true)}
-              style={{
-                ...actionBtnStyle,
-                width: "100%",
-                color: DANGER,
-                borderColor: hexToRgba(DANGER, 0.4),
-                background: "transparent",
-                cursor: "pointer",
-              }}
-            >
-              이 랙 삭제
-            </button>
+              </Field>
+            </>
           )}
-        </div>
-      )}
 
-      {/* 이미지 확대 모달 */}
-      {zoomImageUrl && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(10, 10, 11, 0.85)",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 9999,
-            padding: 24,
-            backdropFilter: "blur(4px)",
-          }}
-          onClick={() => setZoomImageUrl(null)}
-        >
-          <div
-            style={{
-              position: "relative",
-              maxWidth: "90vw",
-              maxHeight: "80vh",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              borderRadius: 12,
-              overflow: "hidden",
-              boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.5)",
-              background: "#000",
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <img
-              src={zoomImageUrl}
-              alt={zoomImageName}
-              referrerPolicy="no-referrer"
-              style={{
-                maxWidth: "100%",
-                maxHeight: "80vh",
-                objectFit: "contain",
-              }}
+          <Field label="품목명">
+            <input
+              value={form.name}
+              onChange={(e) => update("name", e.target.value)}
+              placeholder="품목 이름 입력"
+              style={{ width: "100%" }}
             />
-            {/* 닫기 버튼 */}
-            <button
-              onClick={() => setZoomImageUrl(null)}
-              style={{
-                position: "absolute",
-                top: 12,
-                right: 12,
-                background: "rgba(0, 0, 0, 0.6)",
-                border: "none",
-                color: "#ffffff",
-                width: 32,
-                height: 32,
-                borderRadius: "50%",
-                fontSize: 16,
-                fontWeight: "bold",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              ✕
-            </button>
+          </Field>
+
+          <Field label="선반 내 서브 분류 (예: 공구, M2 규격, M3 규격 등)">
+            {subMode === "select" && existingSubcategories.length > 0 ? (
+              <div style={{ display: "flex", gap: 8 }}>
+                <select
+                  value={form.spec}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === "__custom__") {
+                      setSubMode("custom");
+                    } else {
+                      update("spec", val);
+                    }
+                  }}
+                  style={{
+                    flex: 1,
+                    background: "var(--input-bg, #0f172a)",
+                    color: TEXT_MAIN,
+                    border: "1px solid var(--panel-border, #334155)",
+                    borderRadius: "6px",
+                    padding: "10px 14px",
+                    fontSize: "13px",
+                    outline: "none",
+                  }}
+                >
+                  <option value="">선택 안 함 (기타)</option>
+                  {existingSubcategories.map((sub) => (
+                    <option key={sub} value={sub}>
+                      {sub}
+                    </option>
+                  ))}
+                  <option value="__custom__">➕ 새 서브 분류 직접 입력...</option>
+                </select>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <input
+                  value={form.spec}
+                  onChange={(e) => update("spec", e.target.value)}
+                  placeholder="선반 내에서 구분할 서브 분류 직접 입력"
+                  style={{ width: "100%" }}
+                />
+                {existingSubcategories.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setSubMode("select")}
+                    style={{
+                      alignSelf: "flex-end",
+                      background: "transparent",
+                      border: "none",
+                      color: ACCENT_SOFT,
+                      fontSize: "11px",
+                      cursor: "pointer",
+                      padding: "2px 4px",
+                    }}
+                  >
+                    📋 기존 서브 분류 목록에서 선택하기
+                  </button>
+                )}
+              </div>
+            )}
+          </Field>
+
+          <Field label="특이사항">
+            <input
+              value={form.note}
+              onChange={(e) => update("note", e.target.value)}
+              placeholder="특이사항 또는 주의사항 입력"
+              style={{ width: "100%" }}
+            />
+          </Field>
+
+          <div style={{ display: "flex", gap: 10 }}>
+            <Field label="재고 수량" style={{ flex: 1 }}>
+              <div style={{ display: "flex", gap: 6 }}>
+                <input
+                  type="text"
+                  value={form.stock === null ? "" : String(form.stock)}
+                  onChange={(e) => {
+                    const val = e.target.value.trim();
+                    if (val.toUpperCase() === "N/A") {
+                      update("stock", "N/A");
+                    } else if (val === "") {
+                      update("stock", null);
+                    } else {
+                      const num = Number(val);
+                      update("stock", isNaN(num) ? val : num);
+                    }
+                  }}
+                  placeholder="숫자 또는 N/A"
+                  style={{ width: "100%", flex: 1 }}
+                />
+                <button
+                  type="button"
+                  onClick={() => update("stock", "N/A")}
+                  style={{
+                    background: form.stock === "N/A" ? "#6366f1" : "rgba(255, 255, 255, 0.05)",
+                    border: "1px solid var(--panel-border, #334155)",
+                    borderRadius: "6px",
+                    padding: "0 10px",
+                    fontSize: "11px",
+                    color: form.stock === "N/A" ? "#ffffff" : "var(--text-dim, #94a3b8)",
+                    cursor: "pointer",
+                    whiteSpace: "nowrap",
+                    height: "36px"
+                  }}
+                >
+                  N/A 지정
+                </button>
+              </div>
+            </Field>
+            <Field label="담당자" style={{ flex: 1 }}>
+              <input
+                value={form.manager}
+                onChange={(e) => update("manager", e.target.value)}
+                placeholder="담당자명"
+                style={{
+                  width: "100%",
+                  height: "36px"
+                }}
+              />
+            </Field>
           </div>
-          <div
+
+          <Field label="사진 링크 (구글 드라이브 주소 또는 일반 이미지 URL)">
+            <input
+              value={form.photo}
+              onChange={(e) => update("photo", e.target.value)}
+              placeholder="구글 드라이브 공유 링크나 이미지 URL 주소를 입력하세요"
+              style={{ width: "100%" }}
+            />
+            <span style={{ fontSize: 10, color: TEXT_DIM, marginTop: 4, display: "block" }}>
+              * 구글 드라이브 사진의 공유 범위를 '링크가 있는 모든 사용자'로 설정하여 붙여넣으시면 실시간 사진 연동이 작동합니다.
+            </span>
+          </Field>
+
+          <Field label="구매링크">
+            <input
+              value={form.link}
+              onChange={(e) => update("link", e.target.value)}
+              placeholder="N/A 또는 구매 URL"
+              style={{ width: "100%" }}
+            />
+          </Field>
+        </div>
+
+        <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+          <button
+            onClick={() => onSave({ ...form, location })}
+            disabled={!canSave}
             style={{
-              marginTop: 12,
-              color: "#ffffff",
-              fontSize: 14,
+              flex: 1,
+              background: ACCENT,
+              border: `1px solid ${ACCENT}`,
+              color: "#15161A",
+              borderRadius: 7,
+              padding: "11px 0",
+              fontSize: 13.5,
               fontWeight: 600,
-              background: "rgba(0, 0, 0, 0.6)",
-              padding: "6px 16px",
-              borderRadius: 20,
-              textAlign: "center",
+              opacity: !canSave ? 0.5 : 1,
+              cursor: "pointer",
             }}
           >
-            {zoomImageName}
-          </div>
+            저장
+          </button>
+          <button
+            onClick={onClose}
+            style={{
+              flex: 1,
+              background: "transparent",
+              border: `1px solid ${PANEL_BORDER}`,
+              color: TEXT_DIM,
+              borderRadius: 7,
+              padding: "11px 0",
+              fontSize: 13.5,
+              cursor: "pointer",
+            }}
+          >
+            취소
+          </button>
         </div>
-      )}
-    </aside>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ background: "var(--input-bg, #0f172a)", borderRadius: 6, padding: "7px 10px" }}>
-      <div style={{ fontSize: "10px", color: TEXT_DIM }}>{label}</div>
-      <div className="mono" style={{ fontSize: "13px", fontWeight: 600, marginTop: 2, color: TEXT_MAIN }}>
-        {value}
       </div>
     </div>
   );
 }
 
-const actionBtnStyle = {
-  background: PANEL,
-  border: `1px solid ${PANEL_BORDER}`,
-  color: TEXT_MAIN,
-  borderRadius: 6,
-  padding: "9px 14px",
-  fontSize: "12.5px",
-  fontWeight: 600,
-  boxShadow: "none",
-};
-
-const stepBtnStyle = {
-  width: 24,
-  height: 24,
-  background: "transparent",
-  border: `1px solid ${PANEL_BORDER}`,
-  color: TEXT_MAIN,
-  borderRadius: 5,
-  fontSize: "14px",
-  lineHeight: 1,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: 0,
-};
+function Field({ label, children, style }: { label: string; children: React.ReactNode; style?: React.CSSProperties }) {
+  return (
+    <div style={style}>
+      <label style={{ fontSize: 11.5, color: TEXT_DIM, display: "block", marginBottom: 5 }}>{label}</label>
+      {children}
+    </div>
+  );
+}

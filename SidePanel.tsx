@@ -1,373 +1,406 @@
-import React, { useState, useEffect } from "react";
-import { InventoryItem, Rack } from "../types";
-import { parseLocation } from "../utils/drive";
+import React, { useState } from "react";
+import { WmsUser } from "../types";
+import { Lock, User, RefreshCw, KeyRound, Eye, ShieldAlert } from "lucide-react";
 
-interface ItemFormModalProps {
-  item: InventoryItem | null;
-  defaultRackId: string;
-  racks: Rack[];
-  onSave: (item: any) => void;
-  onClose: () => void;
-  defaultManager?: string;
+interface LoginPageProps {
+  users: WmsUser[];
+  onLoginSuccess: (user: WmsUser) => void;
+  onViewOnlyMode: () => void;
+  isLightMode: boolean;
+  onSyncUsers: () => Promise<void>;
+  syncing: boolean;
 }
 
-const PANEL = "var(--panel-bg, #1e293b)";
-const PANEL_BORDER = "var(--panel-border, #334155)";
-const TEXT_MAIN = "var(--text-main, #f1f5f9)";
-const TEXT_DIM = "var(--text-dim, #94a3b8)";
-const ACCENT = "#6366f1";
-const ACCENT_SOFT = "#818cf8";
+export default function LoginPage({
+  users,
+  onLoginSuccess,
+  onViewOnlyMode,
+  isLightMode,
+  onSyncUsers,
+  syncing,
+}: LoginPageProps) {
+  const [selectedMode, setSelectedMode] = useState<"view" | "admin">("admin");
+  const [idInput, setIdInput] = useState("");
+  const [passwordInput, setPasswordInput] = useState("");
+  const [localError, setLocalError] = useState("");
 
-export default function ItemFormModal({
-  item,
-  defaultRackId,
-  racks,
-  onSave,
-  onClose,
-  defaultManager,
-}: ItemFormModalProps) {
-  const initialRack = item ? parseLocation(item.location).rack : defaultRackId || (racks[0] && racks[0].id) || "";
-  const initialShelfNum = item ? parseLocation(item.location).shelf : "";
+  const handleLoginSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setLocalError("");
 
-  const [form, setForm] = useState<Omit<InventoryItem, "rowIndex"> & { rowIndex?: number }>(
-    item
-      ? { ...item, manager: defaultManager || item.manager || "관리자" }
-      : {
-          location: "",
-          photo: "",
-          name: "",
-          link: "N/A",
-          stock: 0,
-          updatedAt: "",
-          manager: defaultManager || "관리자",
-          note: "",
-          spec: "",
-        }
-  );
-
-  const [rackId, setRackId] = useState(initialRack);
-  const [shelfMode, setShelfMode] = useState<"existing" | "new">("existing");
-  const [shelfPick, setShelfPick] = useState(initialShelfNum || "");
-  const [newShelfNum, setNewShelfNum] = useState("");
-
-  const currentRack = racks.find((r) => r.id === rackId);
-  const existingShelves = currentRack && currentRack.shelves ? currentRack.shelves : [];
-
-  useEffect(() => {
-    if (existingShelves.length === 0) {
-      setShelfMode("new");
-    } else if (!item) {
-      setShelfMode("existing");
+    if (!idInput.trim() || !passwordInput.trim()) {
+      setLocalError("아이디와 비밀번호를 모두 입력해 주세요.");
+      return;
     }
-  }, [rackId]); // eslint-disable-line
 
-  function update(field: string, value: any) {
-    setForm((f) => ({ ...f, [field]: value }));
-  }
+    const matchedUser = users.find(
+      (u) =>
+        u.id.toLowerCase() === idInput.trim().toLowerCase() &&
+        String(u.password) === passwordInput.trim()
+    );
 
-  function composedLocation() {
-    if (shelfMode === "existing" && shelfPick) {
-      // Picked shelves already have format like "A-01"
-      return shelfPick;
+    if (matchedUser) {
+      onLoginSuccess(matchedUser);
+    } else {
+      setLocalError("일치하는 계정 정보가 없습니다. 다시 입력해 주세요.");
     }
-    if (shelfMode === "new" && newShelfNum.trim()) {
-      return `${rackId}-${newShelfNum.trim()}`;
-    }
-    return "";
-  }
+  };
 
-  const location = item ? form.location : composedLocation();
-  const canSave = location.trim() !== "" && form.name.trim() !== "";
+  const ACCENT = "#6366f1";
+  const ACCENT_LIGHT = "rgba(99, 102, 241, 0.08)";
+  const TEXT_MAIN = isLightMode ? "#0f172a" : "#f1f5f9";
+  const TEXT_DIM = isLightMode ? "#475569" : "#94a3b8";
+  const PANEL_BG = isLightMode ? "#ffffff" : "#1e293b";
+  const INPUT_BG = isLightMode ? "#f8fafc" : "#0f172a";
+  const BORDER_COLOR = isLightMode ? "#cbd5e1" : "#334155";
 
   return (
     <div
       style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(10,10,11,0.7)",
         display: "flex",
+        flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        zIndex: 50,
-        backdropFilter: "blur(2px)",
-      }}
-      onPointerDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        minHeight: "100vh",
+        background: isLightMode
+          ? "linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)"
+          : "linear-gradient(135deg, #0f172a 0%, #020617 100%)",
+        color: TEXT_MAIN,
+        padding: "24px 16px",
+        fontFamily: "var(--font-sans, system-ui, sans-serif)",
       }}
     >
       <div
-        className="item-modal"
         style={{
-          width: 480,
-          maxWidth: "92vw",
-          maxHeight: "86vh",
-          overflowY: "auto",
-          background: PANEL,
-          border: `1px solid ${PANEL_BORDER}`,
-          borderRadius: 12,
-          padding: 24,
-          boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
+          width: "100%",
+          maxWidth: "540px",
+          background: PANEL_BG,
+          border: `1px solid ${BORDER_COLOR}`,
+          borderRadius: "24px",
+          padding: "40px 32px",
+          boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.15), 0 10px 10px -5px rgba(0, 0, 0, 0.1)",
         }}
       >
-        <style>{`
-          .item-modal input, .item-modal select, .item-modal textarea {
-            background: var(--input-bg, #0f172a) !important;
-            color: var(--text-main, #f1f5f9) !important;
-            border: 1px solid var(--panel-border, #334155) !important;
-            border-radius: 6px !important;
-            padding: 8px 12px !important;
-            font-size: 13px !important;
-            outline: none !important;
-            transition: border-color 0.15s ease-in-out !important;
-          }
-          .item-modal input:focus, .item-modal select:focus, .item-modal textarea:focus {
-            border-color: #6366f1 !important;
-            box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2) !important;
-          }
-        `}</style>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <div style={{ fontSize: 16, fontWeight: 700 }}>{item ? "품목 수정" : "품목 추가"}</div>
-          <button onClick={onClose} style={{ background: "transparent", border: "none", color: TEXT_DIM, fontSize: 18, cursor: "pointer" }}>
-            ✕
+        {/* Header App Title */}
+        <div style={{ textAlign: "center", marginBottom: "32px" }}>
+          <div
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: "56px",
+              height: "56px",
+              borderRadius: "16px",
+              background: "rgba(99, 102, 241, 0.12)",
+              color: ACCENT,
+              marginBottom: "16px",
+            }}
+          >
+            <Lock size={26} />
+          </div>
+          <h1 style={{ fontSize: "22px", fontWeight: 800, color: TEXT_MAIN, marginBottom: "8px", letterSpacing: "-0.03em" }}>
+            창고 보관구역 관리 시스템
+          </h1>
+          <p style={{ fontSize: "13px", color: TEXT_DIM }}>
+            원하시는 서비스 이용 권한을 선택하여 시작하세요.
+          </p>
+        </div>
+
+        {/* Permissions Choice Cards: Side-by-Side */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: "16px",
+            marginBottom: "28px",
+          }}
+        >
+          {/* Left Choice Card: View-Only Mode */}
+          <button
+            type="button"
+            onClick={onViewOnlyMode}
+            style={{
+              background: "transparent",
+              border: `2px solid ${BORDER_COLOR}`,
+              borderRadius: "20px",
+              padding: "32px 20px",
+              cursor: "pointer",
+              textAlign: "center",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: "14px",
+              transition: "all 0.2s ease-in-out",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.borderColor = "#10b981";
+              e.currentTarget.style.background = isLightMode ? "rgba(16, 185, 129, 0.04)" : "rgba(16, 185, 129, 0.08)";
+              e.currentTarget.style.transform = "translateY(-2px)";
+              e.currentTarget.style.boxShadow = "0 10px 25px rgba(16, 185, 129, 0.15)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.borderColor = BORDER_COLOR;
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.transform = "none";
+              e.currentTarget.style.boxShadow = "none";
+            }}
+          >
+            <div
+              style={{
+                width: "56px",
+                height: "56px",
+                borderRadius: "50%",
+                background: "rgba(16, 185, 129, 0.12)",
+                color: "#10b981",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                transition: "all 0.2s",
+              }}
+            >
+              <Eye size={28} />
+            </div>
+            <div>
+              <div style={{ fontSize: "16px", fontWeight: 800, color: TEXT_MAIN, marginBottom: "4px" }}>
+                열람용 모드
+              </div>
+              <div style={{ fontSize: "11.5px", color: TEXT_DIM, lineHeight: "1.4" }}>
+                실시간 현황 조회 전용<br />
+                <span style={{ color: "#10b981", fontWeight: 600 }}>[즉시 진입하기]</span>
+              </div>
+            </div>
+          </button>
+
+          {/* Right Choice Card: Admin Mode */}
+          <button
+            type="button"
+            onClick={() => {
+              setSelectedMode("admin");
+              setLocalError("");
+            }}
+            style={{
+              background: selectedMode === "admin"
+                ? (isLightMode ? "rgba(99, 102, 241, 0.05)" : "rgba(99, 102, 241, 0.15)")
+                : "transparent",
+              border: `2px solid ${selectedMode === "admin" ? ACCENT : BORDER_COLOR}`,
+              borderRadius: "20px",
+              padding: "32px 20px",
+              cursor: "pointer",
+              textAlign: "center",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: "14px",
+              transition: "all 0.2s ease-in-out",
+              boxShadow: selectedMode === "admin" ? `0 10px 25px ${isLightMode ? "rgba(99, 102, 241, 0.15)" : "rgba(99, 102, 241, 0.3)"}` : "none",
+            }}
+            onMouseEnter={(e) => {
+              if (selectedMode !== "admin") {
+                e.currentTarget.style.borderColor = ACCENT;
+                e.currentTarget.style.background = isLightMode ? "rgba(99, 102, 241, 0.02)" : "rgba(255, 255, 255, 0.03)";
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (selectedMode !== "admin") {
+                e.currentTarget.style.borderColor = BORDER_COLOR;
+                e.currentTarget.style.background = "transparent";
+              }
+            }}
+          >
+            <div
+              style={{
+                width: "56px",
+                height: "56px",
+                borderRadius: "50%",
+                background: selectedMode === "admin" ? ACCENT : (isLightMode ? "#e2e8f0" : "#334155"),
+                color: selectedMode === "admin" ? "#ffffff" : TEXT_DIM,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                transition: "all 0.2s",
+              }}
+            >
+              <ShieldAlert size={26} />
+            </div>
+            <div>
+              <div style={{ fontSize: "16px", fontWeight: 800, color: TEXT_MAIN, marginBottom: "4px" }}>
+                관리자 모드
+              </div>
+              <div style={{ fontSize: "11.5px", color: TEXT_DIM, lineHeight: "1.4" }}>
+                재고 정보 수정 및 등록<br />
+                <span style={{ color: ACCENT, fontWeight: 600 }}>[로그인 필요]</span>
+              </div>
+            </div>
           </button>
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {item ? (
-            <Field label="위치 (코드)">
-              <input
-                className="mono"
-                value={form.location}
-                onChange={(e) => update("location", e.target.value)}
-                style={{ width: "100%" }}
-              />
-            </Field>
-          ) : (
-            <>
-              <Field label="랙 구역 선택">
-                <select
-                  value={rackId}
-                  onChange={(e) => {
-                    setRackId(e.target.value);
-                    setShelfPick("");
+        {/* Dynamic Panel based on selection */}
+        {selectedMode === "admin" && (
+          <form onSubmit={handleLoginSubmit} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+            {/* ID Input */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "11px", fontWeight: 700, color: TEXT_DIM }}>
+                관리자 ID
+              </label>
+              <div style={{ position: "relative" }}>
+                <User
+                  size={16}
+                  style={{
+                    position: "absolute",
+                    left: "12px",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    color: isLightMode ? "#94a3b8" : "#64748b",
                   }}
-                  style={{ width: "100%", background: "#101114", color: TEXT_MAIN, border: `1px solid ${PANEL_BORDER}`, padding: "6px 10px", borderRadius: 6 }}
-                >
-                  {racks.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.id} 랙 ({r.name})
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="선반(Shelf) 위치">
-                <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-                  <button
-                    type="button"
-                    onClick={() => setShelfMode("existing")}
-                    style={{
-                      flex: 1,
-                      background: shelfMode === "existing" ? "rgba(168,166,160,0.12)" : "transparent",
-                      border: `1px solid ${shelfMode === "existing" ? ACCENT_SOFT : PANEL_BORDER}`,
-                      color: shelfMode === "existing" ? TEXT_MAIN : TEXT_DIM,
-                      borderRadius: 6,
-                      padding: "6px 8px",
-                      fontSize: 11.5,
-                      cursor: "pointer",
-                    }}
-                  >
-                    기존 선반 위치에 추가
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShelfMode("new")}
-                    style={{
-                      flex: 1,
-                      background: shelfMode === "new" ? "rgba(168,166,160,0.12)" : "transparent",
-                      border: `1px solid ${shelfMode === "new" ? ACCENT_SOFT : PANEL_BORDER}`,
-                      color: shelfMode === "new" ? TEXT_MAIN : TEXT_DIM,
-                      borderRadius: 6,
-                      padding: "6px 8px",
-                      fontSize: 11.5,
-                      cursor: "pointer",
-                    }}
-                  >
-                    새 선반 위치 만들기
-                  </button>
-                </div>
-                {shelfMode === "existing" ? (
-                  existingShelves.length > 0 ? (
-                    <select
-                      value={shelfPick}
-                      onChange={(e) => setShelfPick(e.target.value)}
-                      style={{ width: "100%", background: "#101114", color: TEXT_MAIN, border: `1px solid ${PANEL_BORDER}`, padding: "6px 10px", borderRadius: 6 }}
-                    >
-                      <option value="">선반을 선택하세요</option>
-                      {existingShelves.map((s) => (
-                        <option key={s} value={s}>
-                          {s}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <div style={{ fontSize: 12, color: TEXT_DIM }}>
-                      이 랙에는 아직 활성 선반 위치가 없습니다. "새 선반 위치 만들기"를 진행해주세요.
-                    </div>
-                  )
-                ) : (
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <span className="mono" style={{ fontSize: 13, color: TEXT_DIM }}>
-                      {rackId}-
-                    </span>
-                    <input
-                      value={newShelfNum}
-                      onChange={(e) => setNewShelfNum(e.target.value)}
-                      placeholder="예: 05"
-                      style={{ flex: 1 }}
-                    />
-                  </div>
-                )}
-              </Field>
-            </>
-          )}
-
-          <Field label="품목명">
-            <input
-              value={form.name}
-              onChange={(e) => update("name", e.target.value)}
-              placeholder="품목 이름 입력"
-              style={{ width: "100%" }}
-            />
-          </Field>
-
-          <Field label="특이사항">
-            <input
-              value={form.note}
-              onChange={(e) => update("note", e.target.value)}
-              placeholder="특이사항 또는 주의사항 입력"
-              style={{ width: "100%" }}
-            />
-          </Field>
-
-          <div style={{ display: "flex", gap: 10 }}>
-            <Field label="재고 수량" style={{ flex: 1 }}>
-              <div style={{ display: "flex", gap: 6 }}>
+                />
                 <input
                   type="text"
-                  value={form.stock === null ? "" : String(form.stock)}
-                  onChange={(e) => {
-                    const val = e.target.value.trim();
-                    if (val.toUpperCase() === "N/A") {
-                      update("stock", "N/A");
-                    } else if (val === "") {
-                      update("stock", null);
-                    } else {
-                      const num = Number(val);
-                      update("stock", isNaN(num) ? val : num);
-                    }
-                  }}
-                  placeholder="숫자 또는 N/A"
-                  style={{ width: "100%", flex: 1 }}
-                />
-                <button
-                  type="button"
-                  onClick={() => update("stock", "N/A")}
+                  placeholder="ID 입력"
+                  value={idInput}
+                  onChange={(e) => setIdInput(e.target.value)}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck="false"
                   style={{
-                    background: form.stock === "N/A" ? "#6366f1" : "rgba(255, 255, 255, 0.05)",
-                    border: "1px solid var(--panel-border, #334155)",
-                    borderRadius: "6px",
-                    padding: "0 10px",
-                    fontSize: "11px",
-                    color: form.stock === "N/A" ? "#ffffff" : "var(--text-dim, #94a3b8)",
-                    cursor: "pointer",
-                    whiteSpace: "nowrap",
-                    height: "36px"
+                    width: "100%",
+                    background: INPUT_BG,
+                    border: `1px solid ${BORDER_COLOR}`,
+                    borderRadius: "10px",
+                    padding: "10px 12px 10px 38px",
+                    color: TEXT_MAIN,
+                    fontSize: "13px",
+                    outline: "none",
+                    transition: "border-color 0.2s",
                   }}
-                >
-                  N/A 지정
-                </button>
+                  onFocus={(e) => (e.target.style.borderColor = ACCENT)}
+                  onBlur={(e) => (e.target.style.borderColor = BORDER_COLOR)}
+                />
               </div>
-            </Field>
-            <Field label="담당자" style={{ flex: 1 }}>
-              <input
-                value={form.manager}
-                onChange={(e) => update("manager", e.target.value)}
-                placeholder="담당자명"
+            </div>
+
+            {/* Password Input */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "11px", fontWeight: 700, color: TEXT_DIM }}>
+                비밀번호
+              </label>
+              <div style={{ position: "relative" }}>
+                <KeyRound
+                  size={16}
+                  style={{
+                    position: "absolute",
+                    left: "12px",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    color: isLightMode ? "#94a3b8" : "#64748b",
+                  }}
+                />
+                <input
+                  type="password"
+                  placeholder="비밀번호 입력"
+                  value={passwordInput}
+                  onChange={(e) => setPasswordInput(e.target.value)}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck="false"
+                  style={{
+                    width: "100%",
+                    background: INPUT_BG,
+                    border: `1px solid ${BORDER_COLOR}`,
+                    borderRadius: "10px",
+                    padding: "10px 12px 10px 38px",
+                    color: TEXT_MAIN,
+                    fontSize: "13px",
+                    outline: "none",
+                    transition: "border-color 0.2s",
+                  }}
+                  onFocus={(e) => (e.target.style.borderColor = ACCENT)}
+                  onBlur={(e) => (e.target.style.borderColor = BORDER_COLOR)}
+                />
+              </div>
+            </div>
+
+            <div style={{ fontSize: "11px", color: TEXT_DIM, display: "flex", justifyContent: "space-between" }}>
+              <span>현재 동기화된 관리자 계정 수: <b style={{ color: ACCENT }}>{users.length}개</b></span>
+            </div>
+
+            {localError && (
+              <div
                 style={{
-                  width: "100%",
-                  height: "36px"
+                  fontSize: "12px",
+                  color: "#ef4444",
+                  background: "rgba(239, 68, 68, 0.08)",
+                  padding: "8px 12px",
+                  borderRadius: "8px",
+                  border: "1px solid rgba(239, 68, 68, 0.15)",
+                  textAlign: "center",
                 }}
-              />
-            </Field>
-          </div>
+              >
+                {localError}
+              </div>
+            )}
 
-          <Field label="사진 링크 (구글 드라이브 주소 또는 일반 이미지 URL)">
-            <input
-              value={form.photo}
-              onChange={(e) => update("photo", e.target.value)}
-              placeholder="구글 드라이브 공유 링크나 이미지 URL 주소를 입력하세요"
-              style={{ width: "100%" }}
-            />
-            <span style={{ fontSize: 10, color: TEXT_DIM, marginTop: 4, display: "block" }}>
-              * 구글 드라이브 사진의 공유 범위를 '링크가 있는 모든 사용자'로 설정하여 붙여넣으시면 실시간 사진 연동이 작동합니다.
-            </span>
-          </Field>
+            <button
+              type="submit"
+              style={{
+                width: "100%",
+                background: ACCENT,
+                color: "#ffffff",
+                border: "none",
+                borderRadius: "10px",
+                padding: "12px",
+                fontSize: "13.5px",
+                fontWeight: 700,
+                cursor: "pointer",
+                transition: "background 0.2s",
+                boxShadow: "0 4px 12px rgba(99, 102, 241, 0.25)",
+                marginTop: "4px",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#4f46e5")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = ACCENT)}
+            >
+              🔐 관리자 로그인 및 모니터링 진입
+            </button>
+          </form>
+        )}
 
-          <Field label="구매링크">
-            <input
-              value={form.link}
-              onChange={(e) => update("link", e.target.value)}
-              placeholder="N/A 또는 구매 URL"
-              style={{ width: "100%" }}
-            />
-          </Field>
-        </div>
-
-        <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+        {/* Sync Area at the bottom */}
+        <div
+          style={{
+            marginTop: "24px",
+            paddingTop: "16px",
+            borderTop: `1px solid ${isLightMode ? "#f1f5f9" : "#334155"}`,
+            display: "flex",
+            justifyContent: "center",
+          }}
+        >
           <button
-            onClick={() => onSave({ ...form, location })}
-            disabled={!canSave}
+            onClick={onSyncUsers}
+            disabled={syncing}
             style={{
-              flex: 1,
-              background: ACCENT,
-              border: `1px solid ${ACCENT}`,
-              color: "#15161A",
-              borderRadius: 7,
-              padding: "11px 0",
-              fontSize: 13.5,
-              fontWeight: 600,
-              opacity: !canSave ? 0.5 : 1,
-              cursor: "pointer",
-            }}
-          >
-            저장
-          </button>
-          <button
-            onClick={onClose}
-            style={{
-              flex: 1,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "6px",
               background: "transparent",
-              border: `1px solid ${PANEL_BORDER}`,
-              color: TEXT_DIM,
-              borderRadius: 7,
-              padding: "11px 0",
-              fontSize: 13.5,
+              border: "none",
+              color: ACCENT,
+              fontSize: "11px",
+              fontWeight: 700,
               cursor: "pointer",
+              opacity: syncing ? 0.6 : 1,
             }}
           >
-            취소
+            <RefreshCw size={12} className={syncing ? "animate-spin" : ""} style={{ animation: syncing ? "spin 1s linear infinite" : "none" }} />
+            {syncing ? "스프레드시트에서 동기화 중..." : "관리자 계정 실시간 수동 동기화"}
           </button>
         </div>
       </div>
-    </div>
-  );
-}
 
-function Field({ label, children, style }: { label: string; children: React.ReactNode; style?: React.CSSProperties }) {
-  return (
-    <div style={style}>
-      <label style={{ fontSize: 11.5, color: TEXT_DIM, display: "block", marginBottom: 5 }}>{label}</label>
-      {children}
+      <style>{`
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
     </div>
   );
 }

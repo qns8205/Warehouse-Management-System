@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { InventoryItem, Rack, DefectLog, RentLog, WmsUser } from "./types";
 import { DEMO_INVENTORY } from "./data/demo";
-import { autoLayoutRacks, snap, formatTimestampLocal, parseLocation, hexToRgba } from "./utils/drive";
+import { autoLayoutRacks, snap, formatTimestampLocal, parseLocation, hexToRgba, isFuzzyMatch } from "./utils/drive";
 
 // Subcomponents
 import ConnectionBadge from "./components/ConnectionBadge";
@@ -24,12 +24,19 @@ import {
   Grid,
   MapPin,
   ChevronRight,
+  ChevronLeft,
   Package,
   Sun,
   Moon,
+  ExternalLink,
+  QrCode,
+  Smartphone,
+  ArrowLeft,
+  ClipboardList,
+  AlertTriangle,
 } from "lucide-react";
 
-const DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwc5YXabteLtTakGJqNo74AHD_AchtBw1bLlXEBiwmyk7CVdKsesrqSx8FZMOM1LrhuYQ/exec";
+const DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxt86U_xFleI59RbVu-7RMa-zQOgs2J-pLHZQ_acZkQoEdFo9tTOvNv4v9uSWMhZndFgA/exec";
 
 const DEMO_DEFECT_LOGS: DefectLog[] = [
   {
@@ -90,7 +97,7 @@ const DEMO_RENT_LOGS: RentLog[] = [
    ============================================================ */
 export default function App() {
   // 1. 상태 선언
-  const [currentView, setCurrentView] = useState<"landing" | "login" | "rental" | "monitor" | "defect" | "rent">("landing");
+  const [currentView, setCurrentView] = useState<"landing" | "login" | "rental" | "monitor" | "defect" | "rent">("login");
   const [users, setUsers] = useState<WmsUser[]>(() => {
     const cached = localStorage.getItem("wms_cached_users");
     return cached ? JSON.parse(cached) : [{ id: "admin", password: "1234" }];
@@ -106,6 +113,10 @@ export default function App() {
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
     const cached = localStorage.getItem("wms_is_admin");
     return cached === "true"; // 기본은 false (대여/조회 모드)
+  });
+  const [currentUser, setCurrentUser] = useState<WmsUser | null>(() => {
+    const cached = localStorage.getItem("wms_current_user");
+    return cached ? JSON.parse(cached) : null;
   });
   const [showRentModal, setShowRentModal] = useState<{ item: InventoryItem; actionType: "대여" | "반납" } | null>(null);
   const [rentUserName, setRentUserName] = useState("");
@@ -134,8 +145,33 @@ export default function App() {
   const [selectedRackId, setSelectedRackId] = useState<string | null>(null);
 
   // 구글 Apps Script 연동 상태 (로컬 스토리지 보존으로 새로고침해도 자동복구)
-  const [scriptUrl, setScriptUrl] = useState(() => localStorage.getItem("wms_script_url") || DEFAULT_SCRIPT_URL);
+  const [scriptUrl, setScriptUrl] = useState(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const queryUrl = params.get("script_url");
+      if (queryUrl) {
+        localStorage.setItem("wms_script_url", queryUrl);
+        localStorage.setItem("wms_connected", "true");
+        return queryUrl;
+      }
+    }
+    const saved = localStorage.getItem("wms_script_url");
+    if (
+      saved === "https://script.google.com/macros/s/AKfycbwc5YXabteLtTakGJqNo74AHD_AchtBw1bLlXEBiwmyk7CVdKsesrqSx8FZMOM1LrhuYQ/exec" ||
+      saved === "https://script.google.com/macros/s/AKfycby5Way2Bq9NEqxv96yDsKwgCmNw-MLh0ms0Z8XlTKEcjw4n0j4L_xPUEN42RNQDqQ686A/exec"
+    ) {
+      localStorage.setItem("wms_script_url", DEFAULT_SCRIPT_URL);
+      return DEFAULT_SCRIPT_URL;
+    }
+    return saved || DEFAULT_SCRIPT_URL;
+  });
   const [connected, setConnected] = useState(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("script_url")) {
+        return true;
+      }
+    }
     const savedConnected = localStorage.getItem("wms_connected");
     if (savedConnected === null) {
       return true; // 기본값 연동 활성화
@@ -178,6 +214,8 @@ export default function App() {
   const [pan, setPan] = useState({ x: 0, y: 0 });
 
   const [showAddForm, setShowAddForm] = useState(false);
+  const [defaultLocationForNewItem, setDefaultLocationForNewItem] = useState<string | null>(null);
+  const [defaultSpecForNewItem, setDefaultSpecForNewItem] = useState<string | null>(null);
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -189,8 +227,10 @@ export default function App() {
   const [newRackName, setNewRackName] = useState("");
 
   const [displayMode, setDisplayMode] = useState<"grid" | "canvas">("grid");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   // 2. Refs
+  const pendingUpdates = useRef<{ [rowIndex: number]: { stock: number; expiry: number } }>({});
   const canvasRef = useRef<HTMLDivElement>(null);
   const dragState = useRef<{ id: string; startX: number; startY: number; origX: number; origY: number; zoom: number } | null>(null);
   const rotateState = useRef<{ id: string; cx: number; cy: number; startAngle: number } | null>(null);
@@ -205,6 +245,26 @@ export default function App() {
 
   // 4. 초기 레이아웃 복원
   useEffect(() => {
+    // URL에서 script_url 파라미터를 읽어 연동 복원했는지 감지
+    let isRestored = false;
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const queryUrl = params.get("script_url");
+      if (queryUrl) {
+        localStorage.setItem("wms_script_url", queryUrl);
+        localStorage.setItem("wms_connected", "true");
+        isRestored = true;
+        
+        // 주소창에서 파라미터를 제거하여 깔끔하게 세팅
+        try {
+          const cleanUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
+          window.history.replaceState({ path: cleanUrl }, "", cleanUrl);
+        } catch (e) {
+          console.error(e);
+        }
+      }
+    }
+
     if (!localStorage.getItem("wms_script_url")) {
       localStorage.setItem("wms_script_url", scriptUrl);
     }
@@ -212,11 +272,15 @@ export default function App() {
       localStorage.setItem("wms_connected", String(connected));
     }
 
-    // 로컬 스토리지에 캐시된 인벤토리/랙이 있다면 자동 로드
+    if (isRestored) {
+      showToast("🔗 동료로부터 공유받은 구글 스프레드시트 실시간 동기화 링크가 자동 복원되었습니다!", "ok");
+    }
+
+    // 로컬 스토리지에 캐시된 인벤토리/랙이 있다면 자동 로드 (단, 복원 시에는 무시하고 강제 리프레시 유도할 수도 있으나, 아래 silentRefresh가 즉시 실행되므로 그대로 유지)
     const cachedInv = localStorage.getItem("wms_cached_inventory");
     const cachedRacks = localStorage.getItem("wms_cached_racks");
 
-    if (cachedInv && cachedRacks) {
+    if (cachedInv && cachedRacks && !isRestored) {
       try {
         setInventory(JSON.parse(cachedInv));
         setRacks(JSON.parse(cachedRacks));
@@ -272,30 +336,77 @@ export default function App() {
   async function callScript(action: string, payload: any) {
     if (!scriptUrl) throw new Error("구글 스프레드시트 연동 URL이 입력되지 않았습니다.");
     
-    const res = await fetch(scriptUrl, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" }, // CORS 프리플라이트를 피하기 위한 text/plain 설정
-      body: JSON.stringify({ action, payload }),
-    });
+    let res;
+    try {
+      res = await fetch(scriptUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" }, // CORS 프리플라이트를 피하기 위한 text/plain 설정
+        body: JSON.stringify({ action, payload }),
+      });
+    } catch (e: any) {
+      throw new Error(`스프레드시트 서버 연결 실패: ${e.message}. 네트워크 상태나 CORS 설정을 확인하세요.`);
+    }
     
-    const data = await res.json();
+    const text = await res.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      console.error("Non-JSON Response received:", text);
+      if (text.includes("Google Accounts") || text.includes("login") || text.includes("Sign in")) {
+        throw new Error("구글 웹앱 배포 설정이 잘못되었습니다. 웹앱을 배포할 때 '액세스 권한이 있는 사용자'를 반드시 '모든 사용자(Anyone)'로 설정하고 승인하셔야 합니다. 그렇지 않으면 외부 로그인이 요구되어 연동이 실패합니다.");
+      }
+      throw new Error(`스프레드시트가 올바르지 않은 응답(HTML)을 반환했습니다. 웹앱을 '새 버전'으로 배포하고 최신 배포 URL을 올바르게 등록했는지 확인하세요.`);
+    }
+    
     if (!data.success) throw new Error(data.error || "스프레드시트 요청 실패");
     return data;
   }
 
   async function fetchAll() {
     if (!scriptUrl) throw new Error("연동 URL이 비어 있습니다.");
-    const res = await fetch(`${scriptUrl}?action=getAll`);
-    const data = await res.json();
+    
+    let res;
+    try {
+      res = await fetch(`${scriptUrl}?action=getAll`);
+    } catch (e: any) {
+      throw new Error(`스프레드시트 연결 실패: ${e.message}`);
+    }
+    
+    const text = await res.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      console.error("Non-JSON Response received on fetchAll:", text);
+      if (text.includes("Google Accounts") || text.includes("login") || text.includes("Sign in")) {
+        throw new Error("구글 웹앱 배포 설정이 잘못되었습니다. 웹앱을 배포할 때 '액세스 권한이 있는 사용자'를 '모든 사용자(Anyone)'로 설정해 주세요.");
+      }
+      throw new Error(`올바르지 않은 데이터 형식입니다. 웹앱 URL 및 배포 설정을 확인하세요.`);
+    }
+    
     if (!data.success) throw new Error(data.error || "스프레드시트 조회 실패");
     return data;
+  }
+
+  // 서버에서 받은 인벤토리 데이터와 아직 반영 중인 로컬의 최신 재고(낙관적 업데이트)를 병합하여 깜빡임 방지
+  function mergePendingStocks(serverInv: InventoryItem[]): InventoryItem[] {
+    const now = Date.now();
+    return serverInv.map((item) => {
+      const pending = pendingUpdates.current[item.rowIndex];
+      if (pending && now < pending.expiry) {
+        return { ...item, stock: pending.stock };
+      }
+      return item;
+    });
   }
 
   // 백그라운드 무소음 리프레시 (사용자 흐름 방해 없이 자동 싱크)
   async function silentRefresh() {
     try {
       const data = await fetchAll();
-      const inv = data.inventory && data.inventory.length > 0 ? data.inventory : DEMO_INVENTORY;
+      const rawInv = data.inventory && data.inventory.length > 0 ? data.inventory : DEMO_INVENTORY;
+      const inv = mergePendingStocks(rawInv);
       setInventory(inv);
       if (data.sectors && data.sectors.length > 0) {
         setRacks(racksFromServerSectors(data.sectors, inv));
@@ -315,6 +426,20 @@ export default function App() {
       // 무소음 실패는 무시
     }
   }
+
+  // 10초 주기로 스프레드시트 최신 데이터 실시간 자동 동기화 (기기 간 실시간 싱크 완성)
+  useEffect(() => {
+    if (!connected || !scriptUrl) return;
+
+    // 마운트 혹은 화면 전환 시 즉시 한 번 갱신 보장
+    silentRefresh();
+
+    const interval = setInterval(() => {
+      silentRefresh();
+    }, 10000); // 10초 간격 폴링
+
+    return () => clearInterval(interval);
+  }, [connected, scriptUrl, currentView]); // eslint-disable-line
 
   // 구글 스프레드시트 데이터와 랙 선반 정보 병합
   function racksFromServerSectors(sectors: any[], inv: InventoryItem[]): Rack[] {
@@ -349,7 +474,8 @@ export default function App() {
     setConnectError("");
     try {
       const data = await fetchAll();
-      const inv = data.inventory && data.inventory.length > 0 ? data.inventory : DEMO_INVENTORY;
+      const rawInv = data.inventory && data.inventory.length > 0 ? data.inventory : DEMO_INVENTORY;
+      const inv = mergePendingStocks(rawInv);
       setInventory(inv);
       
       let nextRacks: Rack[] = [];
@@ -398,7 +524,8 @@ export default function App() {
     showToast("스프레드시트 동기화 진행 중...", "info");
     try {
       const data = await fetchAll();
-      const inv = data.inventory || [];
+      const rawInv = data.inventory || [];
+      const inv = mergePendingStocks(rawInv);
       setInventory(inv);
       if (data.sectors && data.sectors.length > 0) {
         setRacks(racksFromServerSectors(data.sectors, inv));
@@ -678,13 +805,23 @@ export default function App() {
     inventory.forEach((it) => {
       const { rack } = parseLocation(it.location);
       if (rack !== selectedRack.id) return;
-      const loc = it.location.trim();
+      const loc = it.location.trim().toUpperCase();
       if (!map[loc]) map[loc] = [];
       map[loc].push(it);
     });
     return Object.keys(map)
-      .sort()
-      .map((loc) => ({ shelf: loc, items: map[loc] }));
+      .sort((a, b) => {
+        return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+      })
+      .map((loc) => {
+        // 같은 선반 내의 아이템들을 가나다 & ABC, 숫자 순으로 정렬
+        const sortedItems = [...map[loc]].sort((a, b) => {
+          const nameA = a.name || "";
+          const nameB = b.name || "";
+          return nameA.localeCompare(nameB, "ko", { sensitivity: "base", numeric: true });
+        });
+        return { shelf: loc, items: sortedItems };
+      });
   }, [selectedRack, inventory]);
 
   const totalStockByRack = useMemo(() => {
@@ -709,16 +846,15 @@ export default function App() {
 
   /* ---------------- 품목명, 스펙 검색 ---------------- */
   const searchResults = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return [];
+    if (!searchQuery.trim()) return [];
     return inventory
       .filter(
         (it) =>
-          (it.name || "").toLowerCase().includes(q) ||
-          (it.location || "").toLowerCase().includes(q) ||
-          (it.spec || "").toLowerCase().includes(q) ||
-          (it.note || "").toLowerCase().includes(q) ||
-          (it.manager || "").toLowerCase().includes(q)
+          isFuzzyMatch(it.name || "", searchQuery) ||
+          isFuzzyMatch(it.location || "", searchQuery) ||
+          isFuzzyMatch(it.spec || "", searchQuery) ||
+          isFuzzyMatch(it.note || "", searchQuery) ||
+          isFuzzyMatch(it.manager || "", searchQuery)
       )
       .slice(0, 30);
   }, [searchQuery, inventory]);
@@ -749,44 +885,153 @@ export default function App() {
   /* ---------------- 품목 추가 / 수정 / 삭제 실시간 연동 ---------------- */
   async function saveInventoryItem(item: Omit<InventoryItem, "rowIndex"> & { rowIndex?: number }) {
     const isNew = !item.rowIndex;
-    setSaving(true);
-    try {
+    const originalInventory = [...inventory]; // 실패 시 롤백용 원본 백업
+
+    // 1. 임시 로컬 데이터를 만들어 상태에 즉시 반영 (낙관적 업데이트)
+    let optimisticItem: InventoryItem;
+    if (isNew) {
+      const nextRow = Math.max(0, ...inventory.map((i) => i.rowIndex)) + 1;
+      optimisticItem = {
+        ...item,
+        rowIndex: nextRow,
+        updatedAt: formatTimestampLocal(),
+      } as InventoryItem;
+      setInventory((prev) => [...prev, optimisticItem]);
+    } else {
+      optimisticItem = {
+        ...item,
+        updatedAt: formatTimestampLocal(),
+      } as InventoryItem;
+      setInventory((prev) =>
+        prev.map((i) => (i.rowIndex === item.rowIndex ? { ...i, ...optimisticItem } : i))
+      );
+    }
+
+    // 폼 즉시 닫기 (기다리는 시간 0초 극대화)
+    setEditingItem(null);
+    setShowAddForm(false);
+    showToast(isNew ? "신규 품목 등록 중... (백그라운드 동기화)" : "품목 스펙 저장 중... (백그라운드 동기화)", "info");
+
+    // 2. 백그라운드 서버 연동 (비동기 수행)
+    if (connected) {
+      setSaving(true);
+      const action = isNew ? "addInventoryItem" : "updateInventoryItem";
+      callScript(action, item)
+        .then(async () => {
+          // 최신 인벤토리 실시간 재동기화
+          const data = await fetchAll();
+          setInventory(mergePendingStocks(data.inventory || []));
+          setLastSync(new Date());
+          localStorage.setItem("wms_last_sync", new Date().toISOString());
+          showToast(isNew ? "✅ 신규 품목 동기화 완료" : "✅ 품목 스펙 동기화 완료", "ok");
+        })
+        .catch((err: any) => {
+          console.error("백그라운드 저장 에러:", err);
+          showToast("⚠️ 실시간 스프레드시트 동기화 지연: " + err.message + " (로컬 캐시는 정상 저장됨)", "warn");
+          // 로컬 데이터는 보존하여 사용자의 대기 시간을 최소화하고 저장 상태를 안전하게 지킴
+        })
+        .finally(() => {
+          setSaving(false);
+        });
+    } else {
+      // 데모 모드일 때는 즉시 완료
+      showToast(isNew ? "로컬 데모 모드에 등록되었습니다." : "로컬 데모 모드에 저장되었습니다.", "ok");
+    }
+  }
+
+  async function handleAddSubcategory(shelf: string, spec: string, selectedRowIndexes?: number[]) {
+    if (selectedRowIndexes && selectedRowIndexes.length > 0) {
+      const itemsToUpdate = inventory.filter((item) => selectedRowIndexes.includes(item.rowIndex));
+      const updatedItems = itemsToUpdate.map((item) => ({
+        ...item,
+        spec: spec,
+        updatedAt: formatTimestampLocal(),
+      }));
+
+      // Update locally
+      setInventory((prev) =>
+        prev.map((item) => {
+          if (selectedRowIndexes.includes(item.rowIndex)) {
+            return { ...item, spec: spec, updatedAt: formatTimestampLocal() };
+          }
+          return item;
+        })
+      );
+
+      showToast(`선택한 ${selectedRowIndexes.length}개 물품의 서브 분류가 [${spec}]으로 변경되었습니다.`, "info");
+
       if (connected) {
-        if (isNew) {
-          await callScript("addInventoryItem", item);
-        } else {
-          await callScript("updateInventoryItem", item);
-        }
-        // 최신 인벤토리 실시간 재동기화
-        const data = await fetchAll();
-        setInventory(data.inventory || []);
-      } else {
-        // 오프라인/데모 모드 로컬 반영
-        if (isNew) {
-          const nextRow = Math.max(0, ...inventory.map((i) => i.rowIndex)) + 1;
-          const newItem: InventoryItem = {
-            ...item,
-            rowIndex: nextRow,
-            updatedAt: formatTimestampLocal(),
-          } as InventoryItem;
-          setInventory([...inventory, newItem]);
-        } else {
-          setInventory(
-            inventory.map((i) =>
-              i.rowIndex === item.rowIndex
-                ? ({ ...i, ...item, updatedAt: formatTimestampLocal() } as InventoryItem)
-                : i
-            )
-          );
-        }
+        setSaving(true);
+        callScript("updateMultipleInventoryItems", { items: updatedItems })
+          .then(async () => {
+            const data = await fetchAll();
+            setInventory(mergePendingStocks(data.inventory || []));
+            setLastSync(new Date());
+            showToast("✅ 구글 스프레드시트 일괄 업데이트 완료", "ok");
+          })
+          .catch((err: any) => {
+            console.error("일괄 업데이트 에러:", err);
+            showToast("⚠️ 실시간 스프레드시트 동기화 지연: " + err.message + " (로컬 캐시는 저장됨)", "warn");
+          })
+          .finally(() => {
+            setSaving(false);
+          });
       }
-      setEditingItem(null);
-      setShowAddForm(false);
-      showToast(isNew ? "신규 품목이 등록되었습니다." : "품목 스펙을 저장했습니다.", "ok");
-    } catch (err: any) {
-      showToast("품목 저장 실패: " + err.message, "error");
-    } finally {
-      setSaving(false);
+    } else {
+      const newItem: Omit<InventoryItem, "rowIndex"> = {
+        location: shelf,
+        spec: spec,
+        name: "새 품목",
+        link: "N/A",
+        stock: 0,
+        photo: "",
+        manager: currentUser ? (currentUser.name || currentUser.id) : "관리자",
+        note: "서브 분류 생성을 위해 자동 등록된 임시 품목입니다.",
+        updatedAt: formatTimestampLocal(),
+      };
+      await saveInventoryItem(newItem);
+      showToast(`선반 [${shelf}] 에 [${spec}] 서브 분류가 생성되었습니다.`, "ok");
+    }
+  }
+
+  async function handleRenameSubcategory(shelf: string, oldSubName: string, newSubName: string) {
+    const itemsToUpdate = inventory.filter((item) => item.location === shelf && item.spec === oldSubName);
+    if (itemsToUpdate.length === 0) return;
+
+    const updatedItems = itemsToUpdate.map((item) => ({
+      ...item,
+      spec: newSubName,
+      updatedAt: formatTimestampLocal(),
+    }));
+
+    // Update locally
+    setInventory((prev) =>
+      prev.map((item) => {
+        if (item.location === shelf && item.spec === oldSubName) {
+          return { ...item, spec: newSubName, updatedAt: formatTimestampLocal() };
+        }
+        return item;
+      })
+    );
+
+    showToast(`서브 분류명이 [${oldSubName}]에서 [${newSubName}]으로 변경되었습니다.`, "info");
+
+    if (connected) {
+      setSaving(true);
+      callScript("updateMultipleInventoryItems", { items: updatedItems })
+        .then(async () => {
+          const data = await fetchAll();
+          setInventory(mergePendingStocks(data.inventory || []));
+          setLastSync(new Date());
+          showToast("✅ 구글 스프레드시트 이름 수정 완료", "ok");
+        })
+        .catch((err: any) => {
+          console.error("이름 수정 에러:", err);
+          showToast("⚠️ 실시간 스프레드시트 동기화 지연: " + err.message + " (로컬 캐시는 저장됨)", "warn");
+        })
+        .finally(() => {
+          setSaving(false);
+        });
     }
   }
 
@@ -794,109 +1039,131 @@ export default function App() {
     if (!window.confirm("정말로 이 품목을 삭제하시겠습니까? 관련 데이터가 완전히 소멸합니다.")) {
       return;
     }
-    setSaving(true);
-    try {
-      if (connected) {
-        await callScript("deleteInventoryItem", { rowIndex });
-        const data = await fetchAll();
-        setInventory(data.inventory || []);
-      } else {
-        setInventory(inventory.filter((i) => i.rowIndex !== rowIndex));
-      }
-      showToast("선택된 품목을 안전하게 파기하였습니다.", "info");
-    } catch (err: any) {
-      showToast("삭제 실패: " + err.message, "error");
-    } finally {
-      setSaving(false);
+    const originalInventory = [...inventory];
+
+    // 1. 낙관적으로 목록에서 즉시 제거
+    setInventory((prev) => prev.filter((i) => i.rowIndex !== rowIndex));
+    showToast("품목을 목록에서 삭제하였습니다. (백그라운드 동기화)", "info");
+
+    // 2. 백그라운드 서버 연동 (비동기 수행)
+    if (connected) {
+      setSaving(true);
+      callScript("deleteInventoryItem", { rowIndex })
+        .then(async () => {
+          const data = await fetchAll();
+          setInventory(mergePendingStocks(data.inventory || []));
+          setLastSync(new Date());
+          localStorage.setItem("wms_last_sync", new Date().toISOString());
+          showToast("✅ 구글 스프레드시트 삭제 반영 완료", "ok");
+        })
+        .catch((err: any) => {
+          console.error("삭제 동기화 에러:", err);
+          showToast("⚠️ 삭제 스프레드시트 동기화 지연: " + err.message + " (로컬 목록은 삭제 유지됨)", "warn");
+          // 로컬 목록은 지워진 상태를 그대로 유지
+        })
+        .finally(() => {
+          setSaving(false);
+        });
     }
   }
 
-  // 불량 로그 등록 및 구글 스프레드시트 기록 함수
+  // 불량 로그 등록 및 구글 스프레드시트 기록 함수 (낙관적 업데이트 반영)
   async function handleAddDefectLog(log: Omit<DefectLog, "rowIndex">) {
+    const tempIndex = Date.now();
+    const tempLog: DefectLog = {
+      ...log,
+      rowIndex: tempIndex,
+    };
+
+    // 1. 화면 반응속도 향상을 위해 낙관적 즉시 추가
+    setDefectLogs((prev) => [tempLog, ...prev]);
+    showToast("불량 로그 등록 중... (백그라운드 동기화)", "info");
+
     if (connected) {
-      try {
-        const res = await callScript("addDefectLog", log);
-        const newLog: DefectLog = {
-          ...log,
-          rowIndex: res.rowIndex,
-        };
-        setDefectLogs((prev) => [newLog, ...prev]);
-        showToast("불량 로그가 스프레드시트에 실시간으로 기록되었습니다!", "ok");
-      } catch (err: any) {
-        showToast("실시간 기록 실패: " + err.message + " (데모 모드로 임시 보존)", "error");
-        const newLog: DefectLog = { ...log, rowIndex: Date.now() };
-        setDefectLogs((prev) => [newLog, ...prev]);
-      }
+      callScript("addDefectLog", log)
+        .then((res) => {
+          // 실시간으로 받은 올바른 rowIndex로 교체
+          setDefectLogs((prev) =>
+            prev.map((l) => (l.rowIndex === tempIndex ? { ...l, rowIndex: res.rowIndex } : l))
+          );
+          setLastSync(new Date());
+          localStorage.setItem("wms_last_sync", new Date().toISOString());
+          showToast("✅ 불량 로그 스프레드시트 기록 완료", "ok");
+        })
+        .catch((err: any) => {
+          console.error("불량로그 동기화 실패:", err);
+          showToast("⚠️ 불량로그 동기화 실패: " + err.message + " (로컬 임시 보존됨)", "warn");
+        });
     } else {
-      const newLog: DefectLog = { ...log, rowIndex: Date.now() };
-      setDefectLogs((prev) => [newLog, ...prev]);
       showToast("로컬 데모 모드에 불량 로그가 추가되었습니다.", "info");
     }
   }
 
-  // 대여/반납 로그 등록 및 구글 스프레드시트 기록 함수
+  // 대여/반납 로그 등록 및 구글 스프레드시트 기록 함수 (낙관적 업데이트를 적용하여 체감 속도 극대화)
   async function handleAddRentLog(log: RentLog) {
-    if (connected) {
-      try {
-        await callScript("rentInventoryItem", log);
-        setRentLogs((prev) => [log, ...prev]);
-        
-        // Also update local inventory state with the adjusted stock
-        setInventory((prev) =>
-          prev.map((it) => {
-            if (it.location === log.location && it.name === log.name) {
-              const currentStock = it.stock === null ? 0 : it.stock;
-              const nextStock = log.type === "대여" ? Math.max(0, currentStock - log.qty) : currentStock + log.qty;
-              return {
-                ...it,
-                stock: nextStock,
-                updatedAt: log.timestamp,
-                manager: log.user,
-              };
-            }
-            return it;
-          })
-        );
-        
-        showToast("대여/반납 내역이 스프레드시트에 실시간 동기화되었습니다!", "ok");
-      } catch (err: any) {
-        showToast("실시간 동기화 실패: " + err.message + " (데모 모드로 임시 보존)", "error");
-        setRentLogs((prev) => [log, ...prev]);
-        
-        // Local state update anyway for smooth user feedback
-        setInventory((prev) =>
-          prev.map((it) => {
-            if (it.location === log.location && it.name === log.name) {
-              const currentStock = it.stock === null ? 0 : it.stock;
-              const nextStock = log.type === "대여" ? Math.max(0, currentStock - log.qty) : currentStock + log.qty;
-              return {
-                ...it,
-                stock: nextStock,
-                updatedAt: log.timestamp,
-                manager: log.user,
-              };
-            }
-            return it;
-          })
-        );
-      }
-    } else {
-      setRentLogs((prev) => [log, ...prev]);
-      setInventory((prev) =>
-        prev.map((it) => {
-          if (it.location === log.location && it.name === log.name) {
-            const currentStock = it.stock === null ? 0 : it.stock;
-            const nextStock = log.type === "대여" ? Math.max(0, currentStock - log.qty) : currentStock + log.qty;
+    const targetItem = inventory.find((it) => it.location === log.location && it.name === log.name);
+    const rIndex = targetItem?.rowIndex;
+    let nextStock: number | null = null;
+
+    if (targetItem && typeof targetItem.stock === "number") {
+      nextStock = log.type === "대여" ? Math.max(0, targetItem.stock - Number(log.qty)) : targetItem.stock + Number(log.qty);
+    }
+
+    if (rIndex !== undefined && nextStock !== null) {
+      pendingUpdates.current[rIndex] = {
+        stock: nextStock,
+        expiry: Date.now() + 15000, // 최대 15초 동안 폴링 무시 (세이프가드)
+      };
+    }
+
+    // 1. 화면 반응속도 향상을 위해 로컬 상태(로그 목록 및 인벤토리 재고) 즉시 낙관적 업데이트
+    setRentLogs((prev) => [log, ...prev]);
+    setInventory((prev) =>
+      prev.map((it) => {
+        if (it.location === log.location && it.name === log.name) {
+          if (it.stock === null) {
             return {
               ...it,
-              stock: nextStock,
               updatedAt: log.timestamp,
-              manager: log.user,
             };
           }
-          return it;
+          const currentStock = it.stock;
+          if (typeof currentStock !== "number") {
+            return {
+              ...it,
+              updatedAt: log.timestamp,
+            };
+          }
+          const calculatedNext = log.type === "대여" ? Math.max(0, currentStock - Number(log.qty)) : currentStock + Number(log.qty);
+          return {
+            ...it,
+            stock: calculatedNext,
+            updatedAt: log.timestamp,
+          };
+        }
+        return it;
+      })
+    );
+
+    if (connected) {
+      // 2. 백그라운드로 안전하게 구글 스프레드시트에 연동 요청 (동기 처리 차단 없음)
+      callScript("rentInventoryItem", log)
+        .then(() => {
+          setLastSync(new Date());
+          localStorage.setItem("wms_last_sync", new Date().toISOString());
+          showToast("스프레드시트에 실시간 동기화 완료!", "ok");
+          // 성공 후 구글 시트가 갱신 및 계산 완료될 충분한 시간을 준 후 pending 해제 (2.5초 지연)
+          if (rIndex !== undefined && pendingUpdates.current[rIndex]) {
+            pendingUpdates.current[rIndex].expiry = Date.now() + 2500;
+          }
         })
-      );
+        .catch((err: any) => {
+          showToast("스프레드시트 동기화 실패: " + err.message + " (로컬 보존 중)", "warn");
+          if (rIndex !== undefined) {
+            delete pendingUpdates.current[rIndex];
+          }
+        });
+    } else {
       showToast("로컬 데모 모드에 대여/반납 내역이 추가되었습니다.", "info");
     }
   }
@@ -908,10 +1175,17 @@ export default function App() {
     if (typeof item.stock !== "number") return;
     const nextStock = Math.max(0, item.stock + delta);
     const ts = formatTimestampLocal();
+    const currentUserName = currentUser ? (currentUser.name || currentUser.id) : "관리자";
+
+    // 대기열 및 완료 전까지 stale 데이터 덮어쓰기 방지
+    pendingUpdates.current[item.rowIndex] = {
+      stock: nextStock,
+      expiry: Date.now() + 15000, // 최대 15초 세이프가드
+    };
 
     // 1. 화면 반응속도 향상을 위해 낙관적 로컬 업데이트 즉시 수행
     setInventory((prev) =>
-      prev.map((i) => (i.rowIndex === item.rowIndex ? { ...i, stock: nextStock, updatedAt: ts } : i))
+      prev.map((i) => (i.rowIndex === item.rowIndex ? { ...i, stock: nextStock, manager: currentUserName, updatedAt: ts } : i))
     );
 
     if (!connected) return;
@@ -921,23 +1195,21 @@ export default function App() {
     if (stockSaveTimers.current[key]) clearTimeout(stockSaveTimers.current[key]);
     
     stockSaveTimers.current[key] = setTimeout(() => {
-      callScript("updateInventoryItem", { rowIndex: item.rowIndex, stock: nextStock })
+      callScript("updateInventoryItem", { rowIndex: item.rowIndex, stock: nextStock, manager: currentUserName })
         .then(() => {
           setLastSync(new Date());
           localStorage.setItem("wms_last_sync", new Date().toISOString());
+          // 구글 시트 반영 시간 고려 2.5초 지연 후 만료 조정
+          if (pendingUpdates.current[item.rowIndex]) {
+            pendingUpdates.current[item.rowIndex].expiry = Date.now() + 2500;
+          }
         })
         .catch((err: any) => {
           showToast("수량 스프레드시트 반영 에러: " + err.message, "error");
+          delete pendingUpdates.current[item.rowIndex];
         });
     }, 600);
   }
-
-  // 권한 없는 사용자가 관리자 화면에 접근하는 것을 제한하는 보안 감시자
-  useEffect(() => {
-    if (["monitor", "defect", "rent"].includes(currentView) && !isAdmin) {
-      setCurrentView("landing");
-    }
-  }, [currentView, isAdmin]);
 
   if (currentView === "landing") {
     return (
@@ -966,6 +1238,7 @@ export default function App() {
           setScriptUrl("");
           showToast("스프레드시트 연동이 해제되었습니다. 가상 데모 모드로 동작합니다.", "info");
         }}
+        onOpenSetup={() => setShowSetup(true)}
       />
     );
   }
@@ -974,14 +1247,20 @@ export default function App() {
     return (
       <LoginPage
         users={users}
-        onLoginSuccess={() => {
+        onLoginSuccess={(user) => {
+          setCurrentUser(user);
+          localStorage.setItem("wms_current_user", JSON.stringify(user));
           setIsAdmin(true);
           localStorage.setItem("wms_is_admin", "true");
           setCurrentView("monitor");
-          showToast("관리자 모드로 안전하게 로그인되었습니다.", "ok");
+          showToast(`${user.name || user.id} 관리자님, 환영합니다!`, "ok");
         }}
-        onBack={() => {
-          setCurrentView("landing");
+        onViewOnlyMode={() => {
+          setIsAdmin(false);
+          localStorage.setItem("wms_is_admin", "false");
+          setCurrentUser(null);
+          setCurrentView("monitor");
+          showToast("열람용 모드(조회 전용)로 진입했습니다. 수정이 차단됩니다.", "ok");
         }}
         isLightMode={isLightMode}
         onSyncUsers={handleRefresh}
@@ -1000,6 +1279,9 @@ export default function App() {
         }}
         isLightMode={isLightMode}
         showToast={showToast}
+        connected={connected}
+        lastSync={lastSync}
+        onOpenSetup={() => setShowSetup(true)}
       />
     );
   }
@@ -1014,7 +1296,7 @@ export default function App() {
         color: "var(--text-main, #f1f5f9)",
         fontFamily: "'Inter', sans-serif",
         display: "flex",
-        flexDirection: "column",
+        flexDirection: "row",
         overflow: "hidden",
       }}
     >
@@ -1054,7 +1336,289 @@ export default function App() {
         }
       `}</style>
 
-      {/* ===== 1. 상단 바 ===== */}
+      {/* ===== 1. 좌측 사이드바 ===== */}
+      <aside
+        style={{
+          width: sidebarCollapsed ? 72 : 260,
+          background: "var(--header-bg, #1e293b)",
+          borderRight: "1px solid var(--panel-border, #334155)",
+          display: "flex",
+          flexDirection: "column",
+          height: "100vh",
+          flexShrink: 0,
+          zIndex: 110,
+          transition: "width 0.2s ease",
+        }}
+      >
+        {/* 상단 로고 영역 */}
+        {sidebarCollapsed ? (
+          <div
+            style={{
+              height: 64,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              borderBottom: "1px solid var(--panel-border, #334155)",
+            }}
+          >
+            <button
+              onClick={() => setSidebarCollapsed(false)}
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: 8,
+                background: "transparent",
+                color: "var(--text-main, #f1f5f9)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+              }}
+              title="사이드바 펼치기"
+            >
+              <ChevronRight size={20} />
+            </button>
+          </div>
+        ) : (
+          <div
+            style={{
+              height: 64,
+              padding: "0 16px 0 20px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              borderBottom: "1px solid var(--panel-border, #334155)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div
+                className="mono"
+                style={{
+                  fontWeight: 900,
+                  fontSize: 16,
+                  color: "#ffffff",
+                  letterSpacing: "0.05em",
+                  background: "#4f46e5",
+                  padding: "6px 12px",
+                  borderRadius: 4,
+                  boxShadow: "0 2px 4px rgba(0,0,0,0.2)",
+                }}
+              >
+                LOGISTIX™
+              </div>
+              <div style={{ fontWeight: 800, fontSize: 15, color: "var(--text-main, #f8fafc)", letterSpacing: "-0.01em" }}>
+                WMS PRO
+              </div>
+            </div>
+            <button
+              onClick={() => setSidebarCollapsed(true)}
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: 6,
+                background: "transparent",
+                color: "var(--text-dim, #94a3b8)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+              }}
+              title="사이드바 접기"
+            >
+              <ChevronLeft size={18} />
+            </button>
+          </div>
+        )}
+
+        {/* 사용자 정보 영역 */}
+        {currentUser && (
+          sidebarCollapsed ? (
+            <div
+              style={{
+                padding: "16px 0",
+                borderBottom: "1px solid var(--panel-border, #334155)",
+                display: "flex",
+                justifyContent: "center",
+                background: "rgba(0,0,0,0.1)",
+              }}
+              title={`로그인 사용자: ${currentUser.name || currentUser.id} (관리자)`}
+            >
+              <span style={{ fontSize: 16 }}>👤</span>
+            </div>
+          ) : (
+            <div
+              style={{
+                padding: "16px 20px",
+                borderBottom: "1px solid var(--panel-border, #334155)",
+                background: "rgba(0,0,0,0.1)",
+              }}
+            >
+              <div style={{ fontSize: 11, color: "var(--text-dim, #94a3b8)", marginBottom: 4, fontWeight: 500 }}>
+                현재 로그인 사용자
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-main, #f1f5f9)", display: "flex", alignItems: "center", gap: 6 }}>
+                👤 {currentUser.name || currentUser.id} <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "#4f46e5", color: "#fff", fontWeight: 700 }}>관리자</span>
+              </div>
+            </div>
+          )
+        )}
+
+        {/* 메인 탐색 메뉴 */}
+        <div
+          style={{
+            flex: 1,
+            padding: sidebarCollapsed ? "24px 8px" : "24px 16px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+          }}
+        >
+          <button
+            onClick={() => setCurrentView("monitor")}
+            title={sidebarCollapsed ? "보관 구역" : undefined}
+            style={{
+              width: "100%",
+              padding: sidebarCollapsed ? "12px 0" : "12px 16px",
+              borderRadius: 8,
+              fontSize: 14,
+              fontWeight: 700,
+              justifyContent: sidebarCollapsed ? "center" : "flex-start",
+              background: currentView === "monitor" ? (isLightMode ? "rgba(79, 70, 229, 0.08)" : "rgba(99, 102, 241, 0.15)") : "transparent",
+              color: currentView === "monitor" ? (isLightMode ? "#4f46e5" : "#818cf8") : "var(--text-dim, #94a3b8)",
+              display: "flex",
+              alignItems: "center",
+              gap: sidebarCollapsed ? 0 : 10,
+              border: currentView === "monitor" ? (isLightMode ? "1px solid rgba(79, 70, 229, 0.2)" : "1px solid rgba(99, 102, 241, 0.3)") : "1px solid transparent",
+            }}
+          >
+            <Package size={18} />
+            {!sidebarCollapsed && <span>보관 구역</span>}
+          </button>
+
+          <button
+            onClick={() => setCurrentView("rent")}
+            title={sidebarCollapsed ? "대여/반납 대장" : undefined}
+            style={{
+              width: "100%",
+              padding: sidebarCollapsed ? "12px 0" : "12px 16px",
+              borderRadius: 8,
+              fontSize: 14,
+              fontWeight: 700,
+              justifyContent: sidebarCollapsed ? "center" : "flex-start",
+              background: currentView === "rent" ? (isLightMode ? "rgba(79, 70, 229, 0.08)" : "rgba(99, 102, 241, 0.15)") : "transparent",
+              color: currentView === "rent" ? (isLightMode ? "#4f46e5" : "#818cf8") : "var(--text-dim, #94a3b8)",
+              display: "flex",
+              alignItems: "center",
+              gap: sidebarCollapsed ? 0 : 10,
+              border: currentView === "rent" ? (isLightMode ? "1px solid rgba(79, 70, 229, 0.2)" : "1px solid rgba(99, 102, 241, 0.3)") : "1px solid transparent",
+            }}
+          >
+            <ClipboardList size={18} />
+            {!sidebarCollapsed && <span>대여/반납 대장</span>}
+          </button>
+
+          <button
+            onClick={() => setCurrentView("defect")}
+            title={sidebarCollapsed ? "불량로그" : undefined}
+            style={{
+              width: "100%",
+              padding: sidebarCollapsed ? "12px 0" : "12px 16px",
+              borderRadius: 8,
+              fontSize: 14,
+              fontWeight: 700,
+              justifyContent: sidebarCollapsed ? "center" : "flex-start",
+              background: currentView === "defect" ? (isLightMode ? "rgba(225, 29, 72, 0.08)" : "rgba(244, 63, 94, 0.15)") : "transparent",
+              color: currentView === "defect" ? (isLightMode ? "#e11d48" : "#f43f5e") : "var(--text-dim, #94a3b8)",
+              display: "flex",
+              alignItems: "center",
+              gap: sidebarCollapsed ? 0 : 10,
+              border: currentView === "defect" ? (isLightMode ? "1px solid rgba(225, 29, 72, 0.2)" : "1px solid rgba(244, 63, 94, 0.3)") : "1px solid transparent",
+            }}
+          >
+            <AlertTriangle size={18} />
+            {!sidebarCollapsed && <span>불량로그</span>}
+          </button>
+        </div>
+
+        {/* 사이드바 하단 영역 */}
+        <div
+          style={{
+            padding: sidebarCollapsed ? "16px 8px" : "16px",
+            borderTop: "1px solid var(--panel-border, #334155)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+          }}
+        >
+          {isAdmin && (
+            <button
+              onClick={() => setShowSetup(true)}
+              style={{
+                width: "100%",
+                padding: sidebarCollapsed ? "0" : "0 14px",
+                height: 38,
+                borderRadius: 8,
+                background: "var(--input-bg, #0f172a)",
+                border: "1px solid var(--panel-border, #334155)",
+                color: "var(--text-main, #f1f5f9)",
+                fontSize: 12,
+                fontWeight: 700,
+                gap: sidebarCollapsed ? 0 : 6,
+                cursor: "pointer",
+                justifyContent: "center",
+              }}
+              title={sidebarCollapsed ? (connected ? "연동 관리" : "구글 시트 연동") : undefined}
+            >
+              <Settings size={14} />
+              {!sidebarCollapsed && (connected ? "연동 관리" : "구글 시트 연동")}
+            </button>
+          )}
+
+          <button
+            onClick={() => {
+              setIsAdmin(false);
+              setCurrentUser(null);
+              localStorage.removeItem("wms_is_admin");
+              localStorage.removeItem("wms_current_user");
+              setCurrentView("login");
+              showToast("로그아웃되었습니다. 로그인 화면으로 이동합니다.", "info");
+            }}
+            style={{
+              width: "100%",
+              padding: sidebarCollapsed ? "0" : "0 12px",
+              height: 38,
+              borderRadius: 8,
+              background: "rgba(239, 68, 68, 0.1)",
+              border: "1px solid rgba(239, 68, 68, 0.2)",
+              color: "#f87171",
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: sidebarCollapsed ? 0 : 6,
+            }}
+            title={sidebarCollapsed ? "로그아웃" : "관리자 세션을 종료하고 메인 화면으로 돌아갑니다."}
+          >
+            <span>🔒</span>
+            {!sidebarCollapsed && <span>로그아웃</span>}
+          </button>
+        </div>
+      </aside>
+
+      {/* ===== 2. 우측 메인 작업 영역 ===== */}
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          height: "100vh",
+        }}
+      >
+
+      {/* ===== 1. 상단 툴바 (우측 작업 영역 내부) ===== */}
       <header
         style={{
           height: 64,
@@ -1068,28 +1632,59 @@ export default function App() {
           flexShrink: 0,
         }}
       >
-        {/* 로고 영역 */}
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <div
-            className="mono"
+        {/* 현재 페이지 제목 및 권한 표시 배너 */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: 16, fontWeight: 800, color: "var(--text-main, #f1f5f9)", letterSpacing: "-0.02em" }}>
+            {currentView === "monitor" ? "📦 보관 구역 모니터링" : currentView === "rent" ? "📋 대여/반납 대장" : "⚠️ 불량로그 기록"}
+          </span>
+          <span
             style={{
-              fontWeight: 900,
-              fontSize: 16,
-              color: "#ffffff",
-              letterSpacing: "0.05em",
-              background: "#4f46e5",
-              padding: "6px 12px",
-              borderRadius: 4,
-              boxShadow: "0 2px 4px rgba(0,0,0,0.2)",
+              fontSize: "11px",
+              fontWeight: 700,
+              padding: "4px 10px",
+              borderRadius: "12px",
+              background: isAdmin ? "rgba(16, 185, 129, 0.12)" : "rgba(99, 102, 241, 0.12)",
+              color: isAdmin ? "#10b981" : "#818cf8",
+              border: `1px solid ${isAdmin ? "rgba(16, 185, 129, 0.25)" : "rgba(99, 102, 241, 0.25)"}`,
+              display: "flex",
+              alignItems: "center",
+              gap: 4
             }}
           >
-            LOGISTIX™
-          </div>
-          <div>
-            <div style={{ fontWeight: 800, fontSize: 15, color: "var(--text-main, #f8fafc)", display: "flex", alignItems: "center", gap: 6, letterSpacing: "-0.01em" }}>
-              WMS PRO
-            </div>
-          </div>
+            {isAdmin ? "🛠️ 관리자 모드" : "👀 열람용 모드"}
+          </span>
+          {!isAdmin && (
+            <button
+              onClick={() => {
+                setLoginId("");
+                setLoginPassword("");
+                setLoginError("");
+                setCurrentView("login");
+              }}
+              style={{
+                background: "rgba(99, 102, 241, 0.08)",
+                border: "1px solid rgba(99, 102, 241, 0.25)",
+                borderRadius: "6px",
+                padding: "3px 10px",
+                fontSize: "11px",
+                fontWeight: 700,
+                color: "#818cf8",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                transition: "all 0.2s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "rgba(99, 102, 241, 0.18)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "rgba(99, 102, 241, 0.08)";
+              }}
+            >
+              🔐 관리자 로그인
+            </button>
+          )}
         </div>
 
         {/* 품목 실시간 검색란 */}
@@ -1209,88 +1804,9 @@ export default function App() {
           )}
         </div>
 
-        {/* 동기화 버튼 및 연동 메뉴 */}
+        {/* 우측 보조 컨트롤 영역 */}
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <ConnectionBadge connected={connected} dirty={dirty} saving={saving} lastSync={lastSync} />
-
-          {/* 처음 화면으로 (로그아웃) */}
-          <button
-            onClick={() => {
-              setIsAdmin(false);
-              localStorage.removeItem("wms_is_admin");
-              setCurrentView("landing");
-              showToast("로그아웃되었습니다. 메인 화면으로 이동합니다.", "info");
-            }}
-            style={{
-              padding: "0 12px",
-              height: 34,
-              borderRadius: 6,
-              background: "rgba(239, 68, 68, 0.1)",
-              border: "1px solid rgba(239, 68, 68, 0.3)",
-              color: "#f87171",
-              fontSize: 12,
-              fontWeight: 700,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 5,
-            }}
-            title="관리자 세션을 종료하고 메인 화면으로 돌아갑니다."
-          >
-            🔒 로그아웃 (처음으로)
-          </button>
-
-          {/* 뷰 이동 탭 */}
-          <div style={{ display: "flex", gap: 4, background: "var(--input-bg, #0f172a)", padding: 3, borderRadius: 6, border: "1px solid var(--panel-border, #334155)" }}>
-            <button
-              onClick={() => setCurrentView("monitor")}
-              style={{
-                padding: "4px 10px",
-                height: 26,
-                borderRadius: 4,
-                fontSize: 11,
-                fontWeight: 700,
-                border: "none",
-                cursor: "pointer",
-                background: currentView === "monitor" ? "rgba(255,255,255,0.08)" : "transparent",
-                color: currentView === "monitor" ? "var(--text-main, #f1f5f9)" : "var(--text-dim, #94a3b8)",
-              }}
-            >
-              📦 보관 구역
-            </button>
-            <button
-              onClick={() => setCurrentView("rent")}
-              style={{
-                padding: "4px 10px",
-                height: 26,
-                borderRadius: 4,
-                fontSize: 11,
-                fontWeight: 700,
-                border: "none",
-                cursor: "pointer",
-                background: currentView === "rent" ? "rgba(99, 102, 241, 0.15)" : "transparent",
-                color: currentView === "rent" ? "#818cf8" : "var(--text-dim, #94a3b8)",
-              }}
-            >
-              📋 대여/반납 대장
-            </button>
-            <button
-              onClick={() => setCurrentView("defect")}
-              style={{
-                padding: "4px 10px",
-                height: 26,
-                borderRadius: 4,
-                fontSize: 11,
-                fontWeight: 700,
-                border: "none",
-                cursor: "pointer",
-                background: currentView === "defect" ? "rgba(244, 63, 94, 0.15)" : "transparent",
-                color: currentView === "defect" ? "#f43f5e" : "var(--text-dim, #94a3b8)",
-              }}
-            >
-              ⚠️ 불량로그
-            </button>
-          </div>
 
           <button
             onClick={toggleLightMode}
@@ -1323,29 +1839,60 @@ export default function App() {
           >
             <RefreshCw size={14} />
           </button>
-
-          {isAdmin && (
-            <button
-              onClick={() => setShowSetup(true)}
-              style={{
-                padding: "0 14px",
-                height: 34,
-                borderRadius: 6,
-                background: "#4f46e5",
-                border: "1px solid #4f46e5",
-                color: "#ffffff",
-                fontSize: 12,
-                fontWeight: 700,
-                gap: 6,
-                cursor: "pointer",
-              }}
-            >
-              <Settings size={13} />
-              {connected ? "URL 수정 / 연동 관리" : "구글 시트 연동"}
-            </button>
-          )}
         </div>
       </header>
+
+      {/* ===== 실시간 연동/데모 상태 알림 슬림 배너 ===== */}
+      <div
+        style={{
+          background: connected ? "rgba(16, 185, 129, 0.08)" : "rgba(245, 158, 11, 0.12)",
+          borderBottom: connected ? "1px solid rgba(16, 185, 129, 0.25)" : "1px solid rgba(245, 158, 11, 0.35)",
+          padding: "8px 24px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          fontSize: "12px",
+          color: connected ? (isLightMode ? "#047857" : "#34d399") : (isLightMode ? "#b45309" : "#fbbf24"),
+          gap: 12,
+          flexShrink: 0,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 500 }}>
+          {connected ? (
+            <>
+              <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "#10b981", boxShadow: "0 0 8px #10b981" }} />
+              <span>
+                <strong>[실시간 동기화 상태]</strong> 현재 내 구글 스프레드시트({scriptUrl.substring(0, 45)}...)와 연동되어 있습니다. <strong>10초 간격으로 실시간 자동 동기화(자동 새로고침) 중</strong>이며, 다른 사용자 PC에서도 동일하게 내용이 실시간 반영됩니다.
+              </span>
+            </>
+          ) : (
+            <>
+              <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "#f59e0b", boxShadow: "0 0 8px #f59e0b" }} />
+              <span>
+                <strong>[데모용 가상 모드]</strong> 현재 구글 시트와 연동되지 않은 상태입니다. 동료와 실시간 데이터(사용자 계정 포함)를 공유하려면, <strong>[구글 시트 연동]</strong>에서 연동을 완료하고 생성된 <strong>공유 링크</strong>로 동료를 접속하게 하세요!
+              </span>
+            </>
+          )}
+        </div>
+        {!connected && isAdmin && (
+          <button
+            onClick={() => setShowSetup(true)}
+            style={{
+              background: "#f59e0b",
+              color: "#ffffff",
+              border: "none",
+              borderRadius: 4,
+              padding: "4px 10px",
+              fontSize: "11px",
+              fontWeight: 700,
+              cursor: "pointer",
+              boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
+            }}
+          >
+            연동 설정 열기
+          </button>
+        )}
+      </div>
 
       {/* ===== 2. 본문 메인 ===== */}
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
@@ -1365,6 +1912,7 @@ export default function App() {
             onClose={() => setCurrentView("monitor")}
             isLightMode={isLightMode}
             isAdmin={isAdmin}
+            showToast={showToast}
           />
         ) : (
           <>
@@ -1558,7 +2106,13 @@ export default function App() {
               onUpdateRack={(fields) => updateRackField(selectedRack!.id, fields)}
               onDeleteRack={() => deleteRack(selectedRack!.id)}
               onEditItem={(item) => setEditingItem(item)}
-              onAddItem={() => setShowAddForm(true)}
+              onAddItem={(loc, spec) => {
+                setDefaultLocationForNewItem(loc || null);
+                setDefaultSpecForNewItem(spec || null);
+                setShowAddForm(true);
+              }}
+              onAddSubcategory={handleAddSubcategory}
+              onRenameSubcategory={handleRenameSubcategory}
               onDeleteItem={deleteInventoryItemRow}
               highlightShelf={
                 selectedRack && highlightShelf && parseLocation(highlightShelf).rack === selectedRack.id
@@ -1601,12 +2155,18 @@ export default function App() {
         <ItemFormModal
           item={editingItem}
           defaultRackId={selectedRack ? selectedRack.id : racks[0] ? racks[0].id : ""}
+          defaultLocation={defaultLocationForNewItem}
+          defaultSpec={defaultSpecForNewItem}
           racks={racks}
           onSave={saveInventoryItem}
           onClose={() => {
             setShowAddForm(false);
             setEditingItem(null);
+            setDefaultLocationForNewItem(null);
+            setDefaultSpecForNewItem(null);
           }}
+          defaultManager={currentUser ? (currentUser.name || currentUser.id) : "관리자"}
+          inventory={inventory}
         />
       )}
 
@@ -1931,7 +2491,7 @@ export default function App() {
                 <input
                   type="number"
                   min={1}
-                  max={showRentModal.actionType === "대여" ? (showRentModal.item.stock ?? 0) : undefined}
+                  max={showRentModal.actionType === "대여" ? (typeof showRentModal.item.stock === "number" ? showRentModal.item.stock : undefined) : undefined}
                   value={rentQty}
                   onChange={(e) => setRentQty(Math.max(1, parseInt(e.target.value) || 1))}
                   style={{
@@ -1944,9 +2504,9 @@ export default function App() {
                     outline: "none",
                   }}
                 />
-                {showRentModal.actionType === "대여" && rentQty > (showRentModal.item.stock ?? 0) && (
+                {showRentModal.actionType === "대여" && typeof showRentModal.item.stock === "number" && rentQty > showRentModal.item.stock && (
                   <span style={{ fontSize: "11px", color: "#f43f5e" }}>
-                    재고 수량({showRentModal.item.stock ?? 0}개)을 초과하여 대여할 수 없습니다.
+                    재고 수량({showRentModal.item.stock}개)을 초과하여 대여할 수 없습니다.
                   </span>
                 )}
               </div>
@@ -1996,7 +2556,7 @@ export default function App() {
                     showToast("담당자 이름을 입력해주세요.", "warn");
                     return;
                   }
-                  if (showRentModal.actionType === "대여" && rentQty > (showRentModal.item.stock ?? 0)) {
+                  if (showRentModal.actionType === "대여" && typeof showRentModal.item.stock === "number" && rentQty > showRentModal.item.stock) {
                     showToast("재고 수량이 부족합니다.", "warn");
                     return;
                   }
@@ -2014,7 +2574,7 @@ export default function App() {
                   handleAddRentLog(log);
                   setShowRentModal(null);
                 }}
-                disabled={showRentModal.actionType === "대여" && rentQty > (showRentModal.item.stock ?? 0)}
+                disabled={showRentModal.actionType === "대여" && typeof showRentModal.item.stock === "number" && rentQty > showRentModal.item.stock}
                 style={{
                   background: showRentModal.actionType === "대여" ? "#4f46e5" : "#10b981",
                   color: "#ffffff",
@@ -2023,7 +2583,7 @@ export default function App() {
                   fontSize: "13px",
                   fontWeight: 700,
                   cursor: "pointer",
-                  opacity: showRentModal.actionType === "대여" && rentQty > (showRentModal.item.stock ?? 0) ? 0.5 : 1,
+                  opacity: showRentModal.actionType === "대여" && typeof showRentModal.item.stock === "number" && rentQty > showRentModal.item.stock ? 0.5 : 1,
                 }}
               >
                 {showRentModal.actionType === "대여" ? "대여하기" : "반납하기"}
@@ -2063,6 +2623,7 @@ export default function App() {
           {toast.msg}
         </div>
       )}
+      </div>
     </div>
   );
 }

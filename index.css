@@ -1,622 +1,1872 @@
-import React, { useState } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
+import { InventoryItem, RentLog } from "../types";
+import { ArrowLeft, Search, Check, ChevronDown, Package, User, Calendar, FileText, Image as ImageIcon, ShoppingCart, Trash2, Plus, Minus, Info, AlertCircle, X } from "lucide-react";
+import { formatTimestampLocal, getGoogleDriveImageUrl, isFuzzyMatch } from "../utils/drive";
 
-interface SetupModalProps {
-  scriptUrl: string;
-  setScriptUrl: (url: string) => void;
-  connecting: boolean;
-  connectError: string;
+interface RentalPageProps {
+  inventory: InventoryItem[];
+  onAddRentLog: (log: RentLog) => Promise<void>;
+  onBack: () => void;
+  isLightMode: boolean;
+  showToast: (msg: string, type: "ok" | "error" | "info" | "warn") => void;
   connected: boolean;
-  onConnect: () => void;
-  onClose: () => void;
-  onDisconnect: () => void;
+  lastSync: Date | null;
+  onOpenSetup: () => void;
 }
 
-const PANEL = "var(--panel-bg, #1e293b)";
-const PANEL_BORDER = "var(--panel-border, #334155)";
-const TEXT_MAIN = "var(--text-main, #f1f5f9)";
-const TEXT_DIM = "var(--text-dim, #94a3b8)";
-const ACCENT = "#6366f1";
-const DANGER = "#f43f5e";
-const OK = "#10b981";
-
-export default function SetupModal({
-  scriptUrl,
-  setScriptUrl,
-  connecting,
-  connectError,
+export default function RentalPage({
+  inventory,
+  onAddRentLog,
+  onBack,
+  isLightMode,
+  showToast,
   connected,
-  onConnect,
-  onClose,
-  onDisconnect,
-}: SetupModalProps) {
-  const [copied, setCopied] = useState(false);
-  const [shareCopied, setShareCopied] = useState(false);
+  lastSync,
+  onOpenSetup,
+}: RentalPageProps) {
+  // 상태 선언
+  const [rentUser, setRentUser] = useState("");
+  const [actionType, setActionType] = useState<"대여" | "반납">("대여");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
+  const [rentQty, setRentQty] = useState(1);
+  const [noteInput, setNoteInput] = useState("");
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleCopyShareLink = () => {
-    if (!scriptUrl) return;
-    try {
-      const currentOrigin = window.location.origin + window.location.pathname;
-      const shareLink = `${currentOrigin}?script_url=${encodeURIComponent(scriptUrl.trim())}`;
-      navigator.clipboard.writeText(shareLink);
-      setShareCopied(true);
-      setTimeout(() => setShareCopied(false), 2000);
-    } catch (e) {
-      console.error("Failed to copy link:", e);
+  // 모바일 최적화 상태 및 자재 통합 뷰어 상태
+  const [isMobile, setIsMobile] = useState(false);
+  const [activeTab, setActiveTab] = useState<"lookup" | "request" | "cart">("lookup");
+  const [lookupQuery, setLookupQuery] = useState("");
+
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    checkMobile();
+    window.addEventListener("resize", checkMobile);
+
+    // 로컬 스토리지에서 담당자 이름 로드
+    const savedUser = localStorage.getItem("wms_mobile_rent_user") || "";
+    if (savedUser) {
+      setRentUser(savedUser);
     }
+
+    return () => {
+      window.removeEventListener("resize", checkMobile);
+    };
+  }, []);
+
+  // 리스트에 없는 임시 물품 추가 모드 상태
+  const [isCustomMode, setIsCustomMode] = useState(false);
+  const [customName, setCustomName] = useState("");
+  const [customLocation, setCustomLocation] = useState("기타");
+
+  // Cart for multiple items
+  const [cart, setCart] = useState<{
+    id: string;
+    item: InventoryItem;
+    qty: number;
+    type: "대여" | "반납";
+    note: string;
+  }[]>([]);
+
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // 드롭다운 외부 클릭 감지하여 닫기
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
+
+  // 검색 쿼리에 따라 물품 필터링
+  const filteredItems = useMemo(() => {
+    if (!searchQuery.trim()) return inventory;
+    return inventory.filter(
+      (item) =>
+        isFuzzyMatch(item.name || "", searchQuery) ||
+        isFuzzyMatch(item.location || "", searchQuery) ||
+        (item.spec && isFuzzyMatch(item.spec, searchQuery))
+    );
+  }, [inventory, searchQuery]);
+
+  // 자재 대장 검색을 위한 독립적인 필터링
+  const searchedLookupItems = useMemo(() => {
+    if (!lookupQuery.trim()) return inventory;
+    return inventory.filter(
+      (item) =>
+        isFuzzyMatch(item.name || "", lookupQuery) ||
+        isFuzzyMatch(item.location || "", lookupQuery) ||
+        (item.spec && isFuzzyMatch(item.spec, lookupQuery))
+    );
+  }, [inventory, lookupQuery]);
+
+  // 아이템 선택 시 기본 대여량 조절
+  const handleSelectItem = (item: InventoryItem) => {
+    setSelectedItem(item);
+    setRentQty(1);
+    setNoteInput("");
+    setIsDropdownOpen(false);
   };
 
-  const scriptCode = `// AppsScript_Code.gs
-// 이 코드를 구글 스프레드시트의 [확장 프로그램] -> [Apps Script]에 붙여넣고 웹앱으로 배포하세요.
-
-const INVENTORY_SHEET_NAME = "시트1"; // 실제 사용 중인 스프레드시트의 시트 탭 이름으로 변경하세요.
-const DEFECT_SHEET_NAME = "불량로그";
-const RENT_SHEET_NAME = "대여로그";
-
-function doGet(e) {
-  try {
-    const action = e.parameter.action;
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(INVENTORY_SHEET_NAME);
-    if (!sheet) {
-      return responseJSON({ success: false, error: "시트 '" + INVENTORY_SHEET_NAME + "'를 찾을 수 없습니다." });
-    }
-    
-    // 불량로그 시트 가져오거나 없으면 자동 생성
-    let defectSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(DEFECT_SHEET_NAME);
-    if (!defectSheet) {
-      defectSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(DEFECT_SHEET_NAME);
-      defectSheet.getRange(1, 1, 1, 6).setValues([["제품명", "개수", "기록 시간", "불량 유형", "세부 사항", "대처 방안"]]);
-    }
-    
-    // 대여로그 시트 가져오거나 없으면 자동 생성
-    let rentSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(RENT_SHEET_NAME);
-    if (!rentSheet) {
-      rentSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(RENT_SHEET_NAME);
-      rentSheet.getRange(1, 1, 1, 7).setValues([["기록 시간", "구분", "위치", "제품명", "수량", "대여자 성함", "메모"]]);
-    }
-    
-    if (action === "getAll") {
-      const inventory = getInventoryData(sheet);
-      const sectors = getSectorLayout();
-      const defectLogs = getDefectLogs(defectSheet);
-      const rentLogs = getRentLogs(rentSheet);
-      return responseJSON({ success: true, inventory: inventory, sectors: sectors, defectLogs: defectLogs, rentLogs: rentLogs });
-    }
-    
-    return responseJSON({ success: false, error: "알 수 없는 GET 액션입니다." });
-  } catch (err) {
-    return responseJSON({ success: false, error: err.toString() });
-  }
-}
-
-function doPost(e) {
-  try {
-    const requestData = JSON.parse(e.postData.contents);
-    const action = requestData.action;
-    const payload = requestData.payload;
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(INVENTORY_SHEET_NAME);
-    if (!sheet) {
-      return responseJSON({ success: false, error: "시트 '" + INVENTORY_SHEET_NAME + "'를 찾을 수 없습니다." });
-    }
-    
-    if (action === "addInventoryItem") {
-      const newRowIndex = addInventoryItem(sheet, payload);
-      return responseJSON({ success: true, rowIndex: newRowIndex });
-    }
-    
-    if (action === "updateInventoryItem") {
-      updateInventoryItem(sheet, payload);
-      return responseJSON({ success: true });
-    }
-    
-    if (action === "deleteInventoryItem") {
-      deleteInventoryItem(sheet, payload.rowIndex);
-      return responseJSON({ success: true });
-    }
-    
-    if (action === "saveSectorLayout") {
-      saveSectorLayout(payload.sectors);
-      return responseJSON({ success: true });
-    }
-    
-    if (action === "deleteSector") {
-      deleteSector(payload.sectorId);
-      return responseJSON({ success: true });
-    }
-
-    if (action === "addDefectLog") {
-      let defectSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(DEFECT_SHEET_NAME);
-      if (!defectSheet) {
-        defectSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(DEFECT_SHEET_NAME);
-        defectSheet.getRange(1, 1, 1, 6).setValues([["제품명", "개수", "기록 시간", "불량 유형", "세부 사항", "대처 방안"]]);
+  // 장바구니에 품목 임시 추가
+  const handleAddToCart = () => {
+    if (isCustomMode) {
+      if (!customName.trim()) {
+        showToast("물품 이름을 입력해 주세요.", "warn");
+        return;
       }
-      const newRowIndex = addDefectLog(defectSheet, payload);
-      return responseJSON({ success: true, rowIndex: newRowIndex });
+      if (rentQty <= 0) {
+        showToast("수량은 1개 이상이어야 합니다.", "warn");
+        return;
+      }
+
+      const customItem: InventoryItem = {
+        rowIndex: -1,
+        location: customLocation.trim() || "기타",
+        photo: "",
+        name: customName.trim(),
+        link: "N/A",
+        stock: "N/A",
+        updatedAt: "",
+        manager: "",
+        note: "리스트 외 임시 품목",
+        spec: "",
+      };
+
+      const newCartItem = {
+        id: Date.now().toString() + Math.random().toString(36).substring(2, 5),
+        item: customItem,
+        qty: rentQty,
+        type: actionType,
+        note: noteInput.trim() || `${actionType} 신청 (리스트 외 품목)`,
+      };
+
+      setCart((prev) => [...prev, newCartItem]);
+      showToast(`${customItem.name} ${rentQty}개가 신청 목록에 임시 추가되었습니다.`, "info");
+
+      // 자재 입력 영역 리셋
+      setCustomName("");
+      setCustomLocation("기타");
+      setRentQty(1);
+      setNoteInput("");
+      return;
     }
 
-    if (action === "rentInventoryItem") {
-      let rentSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(RENT_SHEET_NAME);
-      if (!rentSheet) {
-        rentSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(RENT_SHEET_NAME);
-        rentSheet.getRange(1, 1, 1, 7).setValues([["기록 시간", "구분", "위치", "제품명", "수량", "대여자 성함", "메모"]]);
+    let activeItem = selectedItem;
+    let isTempItem = false;
+
+    if (!activeItem && searchQuery.trim()) {
+      // 드롭다운에 없는 것을 직접 입력한 경우, 임시 품목으로 자동 처리
+      activeItem = {
+        rowIndex: -1,
+        location: "기타",
+        photo: "",
+        name: searchQuery.trim(),
+        link: "N/A",
+        stock: "N/A",
+        updatedAt: "",
+        manager: "",
+        note: "리스트 외 임시 품목",
+        spec: "",
+      };
+      isTempItem = true;
+    }
+
+    if (!activeItem) {
+      showToast("대여 또는 반납할 품목을 선택하거나 검색창에 직접 입력해 주세요.", "warn");
+      return;
+    }
+    if (rentQty <= 0) {
+      showToast("수량은 1개 이상이어야 합니다.", "warn");
+      return;
+    }
+
+    // 대여일 때 재고 검증 (재고 수량이 숫자일 때만 수행)
+    if (actionType === "대여" && typeof activeItem.stock === "number") {
+      const currentStock = activeItem.stock ?? 0;
+      if (currentStock <= 0) {
+        showToast("선택한 물품의 현재고가 부족하여 대여할 수 없습니다.", "error");
+        return;
       }
-      const newRowIndex = addRentLog(rentSheet, payload);
       
-      // Update inventory stock count
-      const lastRow = sheet.getLastRow();
-      if (lastRow >= 2) {
-        const values = sheet.getRange(2, 1, lastRow - 1, 9).getValues();
-        for (let i = 0; i < values.length; i++) {
-          // Compare location (Col 1) and name (Col 3) to find unique match
-          if (String(values[i][0]).trim() === String(payload.location).trim() && 
-              String(values[i][2]).trim() === String(payload.name).trim()) {
-            const rowIdx = i + 2;
-            const stockCell = sheet.getRange(rowIdx, 5); // E열 (index 5, 1-indexed)
-            let currentStock = Number(stockCell.getValue() || 0);
-            const qtyChange = Number(payload.qty || 0);
-            
-            if (payload.type === "대여") {
-              currentStock = Math.max(0, currentStock - qtyChange);
-            } else if (payload.type === "반납") {
-              currentStock = currentStock + qtyChange;
-            }
-            stockCell.setValue(currentStock);
-            
-            // F열 (수정일시) 및 G열 (담당자) 업데이트
-            sheet.getRange(rowIdx, 6).setValue(formatDate(new Date()));
-            sheet.getRange(rowIdx, 7).setValue(payload.user || "");
-            break;
-          }
-        }
-      }
-      return responseJSON({ success: true, rowIndex: newRowIndex });
-    }
-    
-    return responseJSON({ success: false, error: "알 수 없는 POST 액션입니다." });
-  } catch (err) {
-    return responseJSON({ success: false, error: err.toString() });
-  }
-}
+      // 장바구니에 담긴 동일 품목의 대여 수량 합산
+      const alreadyInCartQty = cart
+        .filter((c) => c.item.name === activeItem!.name && c.type === "대여")
+        .reduce((acc, c) => acc + c.qty, 0);
 
-function getInventoryData(sheet) {
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return [];
-  
-  const range = sheet.getRange(2, 1, lastRow - 1, 9);
-  const values = range.getValues();
-  const displayValues = range.getDisplayValues();
-  const richTextValues = range.getRichTextValues();
-  const inventory = [];
-  
-  for (let i = 0; i < values.length; i++) {
-    const row = values[i];
-    const richRow = richTextValues[i];
-    const rowIndex = i + 2;
-    
-    // I열 (index 8, 사진 링크용)에서 이미지 주소 추출 (B열은 참고하지 않음)
-    let photoUrl = "";
-    if (richRow && richRow[8]) {
-      photoUrl = richRow[8].getLinkUrl() || "";
-      if (!photoUrl && typeof richRow[8].getRuns === "function") {
-        const runs = richRow[8].getRuns();
-        for (let r = 0; r < runs.length; r++) {
-          const runUrl = runs[r].getLinkUrl();
-          if (runUrl) {
-            photoUrl = runUrl;
-            break;
-          }
-        }
+      if ((rentQty + alreadyInCartQty) > currentStock) {
+        showToast(`현재고(${currentStock}개)를 초과하여 신청 장바구니에 담을 수 없습니다. (현재 장바구니: ${alreadyInCartQty}개)`, "warn");
+        return;
       }
     }
-    if (!photoUrl) {
-      photoUrl = String(row[8] || "").trim();
-    }
-    if (photoUrl === "undefined") {
-      photoUrl = "";
-    }
-    
-    // 스마트 칩 링크 주소 추출 (D열 / index 3)
-    let itemLink = "";
-    if (richRow && richRow[3]) {
-      itemLink = richRow[3].getLinkUrl() || "";
-      if (!itemLink && typeof richRow[3].getRuns === "function") {
-        const runs = richRow[3].getRuns();
-        for (let r = 0; r < runs.length; r++) {
-          const runUrl = runs[r].getLinkUrl();
-          if (runUrl) {
-            itemLink = runUrl;
-            break;
-          }
-        }
-      }
-    }
-    if (!itemLink) {
-      itemLink = String(row[3] || "").trim();
-    }
-    
-    inventory.push({
-      rowIndex: rowIndex,
-      location: String(row[0] || "").trim(),
-      photo: photoUrl,
-      name: String(row[2] || "").trim(),
-      link: itemLink,
-      stock: (row[4] === "" || isNaN(Number(row[4]))) ? null : Number(row[4]),
-      updatedAt: displayValues[i][5] || "",
-      manager: String(row[6] || "").trim(),
-      note: String(row[7] || "").trim(),
-      spec: "" // Column I가 사진 링크용이 되었으므로 규격 데이터는 비워둡니다.
-    });
-  }
-  return inventory;
-}
 
-function getDefectLogs(sheet) {
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return [];
-  
-  const range = sheet.getRange(2, 1, lastRow - 1, 6);
-  const values = range.getValues();
-  const displayValues = range.getDisplayValues();
-  const logs = [];
-  for (let i = 0; i < values.length; i++) {
-    const row = values[i];
-    logs.push({
-      rowIndex: i + 2,
-      timestamp: displayValues[i][2] || "",
-      location: "",
-      name: String(row[0] || "").trim(),
-      qty: row[1] === "" ? null : Number(row[1]),
-      defectType: String(row[3] || "").trim(),
-      manager: "",
-      note: String(row[4] || "").trim(),
-      actionTaken: String(row[5] || "").trim()
-    });
-  }
-  return logs;
-}
+    const newCartItem = {
+      id: Date.now().toString() + Math.random().toString(36).substring(2, 5),
+      item: activeItem,
+      qty: rentQty,
+      type: actionType,
+      note: noteInput.trim() || `${actionType} 신청${isTempItem ? " (리스트 외 임시 품목)" : ""}`,
+    };
 
-function addDefectLog(sheet, log) {
-  const lastRow = sheet.getLastRow();
-  const nextRow = lastRow + 1;
-  
-  const nowStr = formatDate(new Date());
-  const rowValues = [
-    log.name || "",
-    log.qty === "" || log.qty == null ? "" : Number(log.qty),
-    log.timestamp || nowStr,
-    log.defectType || "",
-    log.note || "",
-    log.actionTaken || ""
-  ];
-  
-  sheet.getRange(nextRow, 1, 1, 6).setValues([rowValues]);
-  return nextRow;
-}
+    setCart((prev) => [...prev, newCartItem]);
+    showToast(`${activeItem.name} ${rentQty}개가 신청 목록에 임시 추가되었습니다.`, "info");
 
-function getRentLogs(sheet) {
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return [];
-  
-  const range = sheet.getRange(2, 1, lastRow - 1, 7);
-  const values = range.getValues();
-  const displayValues = range.getDisplayValues();
-  const logs = [];
-  for (let i = 0; i < values.length; i++) {
-    const row = values[i];
-    logs.push({
-      rowIndex: i + 2,
-      timestamp: displayValues[i][0] || "",
-      type: String(row[1] || "대여").trim(),
-      location: String(row[2] || "").trim(),
-      name: String(row[3] || "").trim(),
-      qty: row[4] === "" ? 0 : Number(row[4]),
-      user: String(row[5] || "").trim(),
-      note: String(row[6] || "").trim()
-    });
-  }
-  return logs;
-}
-
-function addRentLog(sheet, log) {
-  const lastRow = sheet.getLastRow();
-  const nextRow = lastRow + 1;
-  
-  const nowStr = formatDate(new Date());
-  const rowValues = [
-    log.timestamp || nowStr,
-    log.type || "대여",
-    log.location || "",
-    log.name || "",
-    log.qty === "" || log.qty == null ? 0 : Number(log.qty),
-    log.user || "",
-    log.note || ""
-  ];
-  
-  sheet.getRange(nextRow, 1, 1, 7).setValues([rowValues]);
-  return nextRow;
-}
-
-function addInventoryItem(sheet, item) {
-  const lastRow = sheet.getLastRow();
-  const nextRow = lastRow + 1;
-  const nowStr = formatDate(new Date());
-  
-  const rowValues = [
-    item.location || "",
-    "", // Column B (B열은 참고하지 않으므로 비워둡니다)
-    item.name || "",
-    item.link || "",
-    item.stock === "" || item.stock == null ? "" : Number(item.stock),
-    nowStr,
-    item.manager || "",
-    item.note || "",
-    item.photo || "" // Column I (사진 링크용)
-  ];
-  
-  sheet.getRange(nextRow, 1, 1, 9).setValues([rowValues]);
-  return nextRow;
-}
-
-function updateInventoryItem(sheet, item) {
-  const rowIndex = Number(item.rowIndex);
-  if (!rowIndex || rowIndex < 2) throw new Error("올바르지 않은 행 인덱스: " + rowIndex);
-  
-  const nowStr = formatDate(new Date());
-  const range = sheet.getRange(rowIndex, 1, 1, 9);
-  const currentValues = range.getValues()[0];
-  
-  if (item.location !== undefined) currentValues[0] = item.location;
-  if (item.photo !== undefined) {
-    currentValues[8] = item.photo; // Column I (사진 링크용)만 업데이트합니다.
-  }
-  if (item.name !== undefined) currentValues[2] = item.name;
-  if (item.link !== undefined) currentValues[3] = item.link;
-  if (item.stock !== undefined) currentValues[4] = (item.stock === "" || item.stock == null) ? "" : Number(item.stock);
-  currentValues[5] = nowStr;
-  if (item.manager !== undefined) currentValues[6] = item.manager;
-  if (item.note !== undefined) currentValues[7] = item.note;
-  
-  range.setValues([currentValues]);
-}
-
-function deleteInventoryItem(sheet, rowIndex) {
-  const idx = Number(rowIndex);
-  if (!idx || idx < 2) throw new Error("올바르지 않은 행 인덱스: " + idx);
-  sheet.deleteRow(idx);
-}
-
-function getSectorLayout() {
-  const scriptProperties = PropertiesService.getScriptProperties();
-  const data = scriptProperties.getProperty("sector_layout");
-  if (!data) return [];
-  try {
-    return JSON.parse(data);
-  } catch (e) {
-    return [];
-  }
-}
-
-function saveSectorLayout(sectors) {
-  const scriptProperties = PropertiesService.getScriptProperties();
-  scriptProperties.setProperty("sector_layout", JSON.stringify(sectors));
-}
-
-function deleteSector(sectorId) {
-  const scriptProperties = PropertiesService.getScriptProperties();
-  const data = scriptProperties.getProperty("sector_layout");
-  if (!data) return;
-  try {
-    let sectors = JSON.parse(data);
-    sectors = sectors.filter(function(s) { return s.id !== sectorId; });
-    scriptProperties.setProperty("sector_layout", JSON.stringify(sectors));
-  } catch (e) {}
-}
-
-function formatDate(date) {
-  const pad = function(n) { return String(n).padStart(2, "0"); };
-  return date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate()) + " " + pad(date.getHours()) + ":" + pad(date.getMinutes()) + ":" + pad(date.getSeconds());
-}
-
-function responseJSON(obj) {
-  return ContentService.createTextOutput(JSON.stringify(obj))
-    .setMimeType(ContentService.MimeType.JSON);
-}`;
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(scriptCode);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    // 자재 입력 영역만 리셋 (담당자는 유지)
+    setSelectedItem(null);
+    setRentQty(1);
+    setNoteInput("");
+    setSearchQuery("");
   };
 
-  return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(10,10,11,0.7)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 50,
-        backdropFilter: "blur(2px)",
-      }}
-      onPointerDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
+  // 장바구니에서 특정 행 삭제
+  const handleRemoveFromCart = (id: string) => {
+    setCart((prev) => prev.filter((item) => item.id !== id));
+    showToast("신청 목록에서 제외했습니다.", "info");
+  };
+
+  // 대여/반납 신청서 일괄 제출 처리
+  const handleSubmit = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+
+    if (!rentUser.trim()) {
+      showToast("대여/반납 담당자 이름을 입력해 주세요.", "warn");
+      return;
+    }
+    if (cart.length === 0) {
+      showToast("신청 목록에 품목을 1개 이상 추가해 주세요.", "warn");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const now = new Date();
+      // 순차적으로 등록
+      for (let i = 0; i < cart.length; i++) {
+        const cartItem = cart[i];
+        
+        // 시간 중복으로 인한 스프레드시트 덮어쓰기 등을 막기 위해 미세 조정한 로컬 타임스탬프 구성
+        const baseTime = new Date(now.getTime() + i * 1000);
+        const pad = (n: number) => String(n).padStart(2, "0");
+        const customTsStr = `${baseTime.getFullYear()}-${pad(baseTime.getMonth() + 1)}-${pad(baseTime.getDate())} ${pad(baseTime.getHours())}:${pad(baseTime.getMinutes())}:${pad(baseTime.getSeconds())}`;
+
+        const log: RentLog = {
+          timestamp: customTsStr,
+          location: cartItem.item.location,
+          name: cartItem.item.name,
+          type: cartItem.type,
+          qty: cartItem.qty,
+          user: rentUser.trim(),
+          note: cartItem.note,
+        };
+        await onAddRentLog(log);
+      }
+
+      // 초기화
+      setCart([]);
+      setRentUser("");
+      showToast(`총 ${cart.length}건의 대여/반납 신청서가 성공적으로 일괄 접수되었습니다!`, "ok");
+    } catch (err: any) {
+      showToast("신청 처리에 실패했습니다: " + err.message, "error");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (isMobile) {
+    return (
       <div
         style={{
-          width: 560,
-          maxWidth: "92vw",
-          maxHeight: "86vh",
-          overflowY: "auto",
-          background: PANEL,
-          border: `1px solid ${PANEL_BORDER}`,
-          borderRadius: 12,
-          padding: 24,
-          boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
+          minHeight: "100vh",
+          background: isLightMode ? "#f8fafc" : "#0b0f19",
+          color: isLightMode ? "#0f172a" : "#f1f5f9",
+          display: "flex",
+          flexDirection: "column",
+          fontFamily: "var(--font-sans, system-ui, sans-serif)",
+          paddingBottom: "80px", // space for bottom tabs
         }}
       >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <div style={{ fontSize: 16, fontWeight: 700 }}>구글 스프레드시트 실시간 연동 설정</div>
-          <button
-            onClick={onClose}
-            style={{ background: "transparent", border: "none", color: TEXT_DIM, fontSize: 18, cursor: "pointer" }}
-          >
-            ✕
-          </button>
-        </div>
-
-        <div style={{ fontSize: 13, color: TEXT_DIM, lineHeight: 1.7, marginBottom: 16 }}>
-          Google Apps Script 웹앱 URL을 입력하여 스프레드시트의 재고 목록을 실시간으로 관리할 수 있습니다. 
-          아래 단계를 따라서 스크립트를 최초 1회 설치 및 배포해 주세요.
-        </div>
-
-        <div style={{ marginBottom: 16, background: "var(--input-bg, #0f172a)", padding: 12, borderRadius: 8, border: `1px solid ${PANEL_BORDER}` }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-            <span style={{ fontSize: 12.5, fontWeight: 600, color: OK }}>Apps Script 복사하기</span>
-            <button
-              onClick={handleCopy}
-              style={{
-                background: copied ? OK : ACCENT,
-                color: "#ffffff",
-                border: "none",
-                borderRadius: 4,
-                padding: "4px 10px",
-                fontSize: 11.5,
-                fontWeight: 700,
-                cursor: "pointer",
-              }}
-            >
-              {copied ? "✓ 복사 완료!" : "코드 복사하기"}
-            </button>
-          </div>
-          <p style={{ fontSize: 11.5, color: TEXT_DIM, margin: 0, lineHeight: 1.5 }}>
-            이 코드에는 <b>Column H (특이사항)</b> 매핑, 구글 드라이브 사진 연동 지원, 그리고 <b>'불량로그' 자동 생성 및 실시간 동기화 기록 기능</b>이 완벽하게 반영되어 있습니다.
-          </p>
-        </div>
-
-        <details style={{ marginBottom: 16 }}>
-          <summary style={{ cursor: "pointer", fontSize: 12.5, color: ACCENT, fontWeight: 600, marginBottom: 8 }}>
-            설치 가이드 (상세설명 펼치기)
-          </summary>
-          <ol style={{ fontSize: 12.5, color: TEXT_DIM, lineHeight: 1.9, paddingLeft: 18, marginTop: 10 }}>
-            <li>
-              구글 시트 접속 후 상단 메뉴의 <b>확장 프로그램 (Extensions) → Apps Script</b>를 선택합니다.
-            </li>
-            <li>
-              위의 <b>[코드 복사하기]</b> 버튼을 눌러 복사한 스크립트를 전체 붙여넣기합니다.
-            </li>
-            <li>
-              코드 상단의 <span className="mono" style={{ color: TEXT_MAIN }}>INVENTORY_SHEET_NAME</span> 값을 실제 시트 탭 이름(예: "시트1")으로 수정하고 저장합니다.
-            </li>
-            <li>
-              우측 상단의 <b>배포 (Deploy) → 새 배포 (New Deployment)</b>를 누릅니다.
-            </li>
-            <li>
-              유형 선택 톱니바퀴에서 <b>웹 앱 (Web App)</b>을 고르고, 실행 사용자는 <b>나 (Me)</b>, 액세스할 수 있는 사람은 <b>모든 사람 (Anyone)</b>으로 지정해 배포를 누릅니다.
-            </li>
-            <li>
-              생성된 <b>웹 앱 URL</b>을 아래 입력란에 넣고 연동을 시작합니다.
-            </li>
-          </ol>
-        </details>
-
-        <label style={{ fontSize: 12, color: TEXT_DIM, display: "block", marginBottom: 6 }}>
-          Apps Script 웹앱 URL (웹 앱 주소)
-        </label>
-        <input
-          value={scriptUrl}
-          onChange={(e) => setScriptUrl(e.target.value)}
-          placeholder="https://script.google.com/macros/s/AKfycb.../exec"
+        {/* 상단 헤더 */}
+        <header
           style={{
-            width: "100%",
-            marginBottom: 8,
-            background: "var(--input-bg, #0f172a)",
-            border: `1px solid ${PANEL_BORDER}`,
-            color: "var(--text-main, #f1f5f9)",
-            padding: "8px 12px",
-            borderRadius: "6px",
-            fontSize: "13px"
+            position: "sticky",
+            top: 0,
+            zIndex: 50,
+            background: isLightMode ? "#ffffff" : "#151d30",
+            borderBottom: `1px solid ${isLightMode ? "#e2e8f0" : "#222f4b"}`,
+            padding: "16px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
           }}
-        />
-        {connectError && <div style={{ fontSize: 12, color: DANGER, marginBottom: 8 }}>{connectError}</div>}
-
-        <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+        >
           <button
-            onClick={onConnect}
-            disabled={connecting}
+            onClick={onBack}
             style={{
-              flex: 1,
-              background: OK,
-              border: `1px solid ${OK}`,
-              color: "#020617",
-              borderRadius: 7,
-              padding: "11px 0",
-              fontSize: 13.5,
-              fontWeight: 600,
-              opacity: connecting ? 0.7 : 1,
+              background: "none",
+              border: "none",
+              color: isLightMode ? "#475569" : "#94a3b8",
+              display: "flex",
+              alignItems: "center",
+              gap: "4px",
+              fontSize: "14px",
+              fontWeight: "bold",
               cursor: "pointer",
+              padding: 0,
             }}
           >
-            {connecting ? "연동 확인 중..." : connected ? "다시 연동하기" : "연동하기"}
+            <ArrowLeft size={18} />
+            처음으로
           </button>
-          {connected && (
-            <button
-              onClick={onDisconnect}
-              style={{
-                flex: 1,
-                background: "transparent",
-                border: `1px solid ${PANEL_BORDER}`,
-                color: TEXT_DIM,
-                borderRadius: 7,
-                padding: "11px 0",
-                fontSize: 13.5,
-                cursor: "pointer",
-              }}
-            >
-              연동 해제 (로컬 모드)
-            </button>
+          
+          <span style={{ fontSize: "16px", fontWeight: 800 }}>자재 조회 및 대여</span>
+          
+          {/* 간이 동기화 표시 아이콘 */}
+          <div
+            onClick={onOpenSetup}
+            style={{
+              width: "8px",
+              height: "8px",
+              borderRadius: "50%",
+              background: connected ? "#10b981" : "#f59e0b",
+              boxShadow: connected ? "0 0 8px #10b981" : "0 0 8px #f59e0b",
+              cursor: "pointer",
+            }}
+            title={connected ? "스프레드시트 연결됨" : "데모 연결 상태"}
+          />
+        </header>
+
+        {/* 탭 본문 영역 */}
+        <div style={{ flex: 1, padding: "16px", display: "flex", flexDirection: "column" }}>
+          {activeTab === "lookup" ? (
+            <>
+              {/* 자재 검색 */}
+              <div style={{ position: "relative", marginBottom: "16px" }}>
+                <Search
+                  size={18}
+                  style={{
+                    position: "absolute",
+                    left: "14px",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    color: isLightMode ? "#94a3b8" : "#64748b",
+                  }}
+                />
+                <input
+                  type="text"
+                  placeholder="품목 이름, 규격 또는 위치 검색..."
+                  value={lookupQuery}
+                  onChange={(e) => setLookupQuery(e.target.value)}
+                  style={{
+                    width: "100%",
+                    background: isLightMode ? "#ffffff" : "#151d30",
+                    border: `1px solid ${isLightMode ? "#cbd5e1" : "#222f4b"}`,
+                    borderRadius: "12px",
+                    padding: "12px 14px 12px 42px",
+                    color: isLightMode ? "#0f172a" : "#f1f5f9",
+                    fontSize: "14px",
+                    outline: "none",
+                  }}
+                />
+                {lookupQuery && (
+                  <button
+                    onClick={() => setLookupQuery("")}
+                    style={{
+                      position: "absolute",
+                      right: "12px",
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      background: "none",
+                      border: "none",
+                      color: isLightMode ? "#94a3b8" : "#64748b",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <X size={16} />
+                  </button>
+                )}
+              </div>
+
+              {/* 검색 결과 자재 목록 */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                {searchedLookupItems.length === 0 ? (
+                  <div
+                    style={{
+                      textAlign: "center",
+                      padding: "40px 20px",
+                      color: isLightMode ? "#94a3b8" : "#475569",
+                      fontSize: "14px",
+                    }}
+                  >
+                    일치하는 자재 품목이 없습니다.
+                  </div>
+                ) : (
+                  searchedLookupItems.map((item) => (
+                    <div
+                      key={item.rowIndex}
+                      onClick={() => handleSelectItem(item)}
+                      style={{
+                        background: isLightMode ? "#ffffff" : "#151d30",
+                        border: `1px solid ${isLightMode ? "#e2e8f0" : "#222f4b"}`,
+                        borderRadius: "16px",
+                        padding: "12px",
+                        display: "flex",
+                        gap: "12px",
+                        alignItems: "center",
+                        cursor: "pointer",
+                        boxShadow: "0 2px 4px rgba(0,0,0,0.02)",
+                      }}
+                    >
+                      {item.photo ? (
+                        <img
+                          src={getGoogleDriveImageUrl(item.photo)}
+                          alt={item.name}
+                          referrerPolicy="no-referrer"
+                          style={{
+                            width: "60px",
+                            height: "60px",
+                            borderRadius: "10px",
+                            objectFit: "cover",
+                            background: isLightMode ? "#f1f5f9" : "#0f172a",
+                            border: `1px solid ${isLightMode ? "#e2e8f0" : "#222f4b"}`,
+                          }}
+                        />
+                      ) : (
+                        <div
+                          style={{
+                            width: "60px",
+                            height: "60px",
+                            borderRadius: "10px",
+                            background: "rgba(99,102,241,0.08)",
+                            color: "#6366f1",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                        >
+                          <Package size={24} />
+                        </div>
+                      )}
+                      
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div
+                          style={{
+                            fontSize: "14px",
+                            fontWeight: 700,
+                            color: isLightMode ? "#1e293b" : "#f1f5f9",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {item.name}
+                        </div>
+                        {item.spec && (
+                          <div
+                            style={{
+                              fontSize: "11px",
+                              color: isLightMode ? "#64748b" : "#94a3b8",
+                              marginTop: "2px",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            규격: {item.spec}
+                          </div>
+                        )}
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "6px" }}>
+                          <span
+                            style={{
+                              fontSize: "10px",
+                              fontWeight: 700,
+                              background: "rgba(99,102,241,0.1)",
+                              color: "#6366f1",
+                              padding: "2px 6px",
+                              borderRadius: "6px",
+                            }}
+                          >
+                            {item.location}
+                          </span>
+                          
+                          <span
+                            style={{
+                              fontSize: "11px",
+                              fontWeight: 600,
+                              color: typeof item.stock === "number" && item.stock > 0 ? "#10b981" : "#ef4444",
+                            }}
+                          >
+                            재고: {item.stock === "N/A" || item.stock === null ? "N/A" : `${item.stock}개`}
+                          </span>
+                        </div>
+                      </div>
+                      
+                      <div
+                        style={{
+                          background: isLightMode ? "#f1f5f9" : "#1e293b",
+                          color: isLightMode ? "#475569" : "#94a3b8",
+                          width: "32px",
+                          height: "32px",
+                          borderRadius: "50%",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontSize: "12px",
+                          fontWeight: "bold",
+                        }}
+                      >
+                        신청
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </>
+          ) : (
+            /* 장바구니/신청 목록 탭 */
+            <div style={{ display: "flex", flexDirection: "column", gap: "16px", flex: 1 }}>
+              <div
+                style={{
+                  background: isLightMode ? "#ffffff" : "#151d30",
+                  border: `1px solid ${isLightMode ? "#e2e8f0" : "#222f4b"}`,
+                  borderRadius: "20px",
+                  padding: "18px",
+                  boxShadow: "0 2px 8px rgba(0,0,0,0.02)",
+                }}
+              >
+                <div style={{ display: "flex", justifySpaceBetween: "space-between", alignItems: "center", marginBottom: "12px", justifyContent: "space-between" }}>
+                  <h3 style={{ fontSize: "16px", fontWeight: 800 }}>🛒 대여/반납 신청 목록</h3>
+                  {cart.length > 0 && (
+                    <button
+                      onClick={() => setCart([])}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        color: "#ef4444",
+                        fontSize: "12px",
+                        fontWeight: "bold",
+                        cursor: "pointer",
+                      }}
+                    >
+                      전체 비우기
+                    </button>
+                  )}
+                </div>
+
+                {cart.length === 0 ? (
+                  <div
+                    style={{
+                      textAlign: "center",
+                      padding: "40px 20px",
+                      color: isLightMode ? "#94a3b8" : "#475569",
+                      fontSize: "13px",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      gap: "8px",
+                    }}
+                  >
+                    <ShoppingCart size={32} style={{ opacity: 0.5, color: "#6366f1" }} />
+                    선택한 대여/반납 품목이 없습니다.<br />자재 검색 탭에서 품목을 담아주세요.
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "10px", maxHeight: "320px", overflowY: "auto" }}>
+                    {cart.map((c) => (
+                      <div
+                        key={c.id}
+                        style={{
+                          background: isLightMode ? "#f8fafc" : "#0f172a",
+                          border: `1px solid ${isLightMode ? "#e2e8f0" : "#222f4b"}`,
+                          borderRadius: "12px",
+                          padding: "10px 12px",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                        }}
+                      >
+                        <div style={{ minWidth: 0, flex: 1, marginRight: "8px" }}>
+                          <div style={{ fontSize: "13px", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {c.item.name}
+                          </div>
+                          <div style={{ display: "flex", gap: "8px", fontSize: "11px", color: isLightMode ? "#64748b" : "#94a3b8", marginTop: "3px" }}>
+                            <span style={{ fontWeight: 800, color: c.type === "대여" ? "#4f46e5" : "#10b981" }}>
+                              [{c.type}]
+                            </span>
+                            <span>{c.qty}개</span>
+                            <span>위치: {c.item.location}</span>
+                          </div>
+                          {c.note && (
+                            <div style={{ fontSize: "10.5px", color: isLightMode ? "#94a3b8" : "#64748b", marginTop: "2px", fontStyle: "italic" }}>
+                              사유: {c.note}
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => handleRemoveFromCart(c.id)}
+                          style={{
+                            background: "rgba(239, 68, 68, 0.08)",
+                            color: "#ef4444",
+                            border: "none",
+                            borderRadius: "8px",
+                            width: "28px",
+                            height: "28px",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            fontSize: "12px",
+                            fontWeight: "bold",
+                            cursor: "pointer",
+                          }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* 제출 폼 */}
+              <div
+                style={{
+                  background: isLightMode ? "#ffffff" : "#151d30",
+                  border: `1px solid ${isLightMode ? "#e2e8f0" : "#222f4b"}`,
+                  borderRadius: "20px",
+                  padding: "18px",
+                  boxShadow: "0 2px 8px rgba(0,0,0,0.02)",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "14px",
+                }}
+              >
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <label style={{ fontSize: "12px", fontWeight: 700, color: isLightMode ? "#475569" : "#94a3b8" }}>
+                    대여/반납 담당자 이름 <span style={{ color: "#ef4444" }}>*</span>
+                  </label>
+                  <div style={{ position: "relative" }}>
+                    <User size={16} style={{ position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)", color: isLightMode ? "#cbd5e1" : "#475569" }} />
+                    <input
+                      type="text"
+                      placeholder="이름을 입력해 주세요 (예: 홍길동)"
+                      value={rentUser}
+                      onChange={(e) => {
+                        setRentUser(e.target.value);
+                        localStorage.setItem("wms_mobile_rent_user", e.target.value);
+                      }}
+                      style={{
+                        width: "100%",
+                        background: isLightMode ? "#f8fafc" : "#0f172a",
+                        border: `1px solid ${isLightMode ? "#cbd5e1" : "#222f4b"}`,
+                        borderRadius: "10px",
+                        padding: "10px 12px 10px 36px",
+                        color: isLightMode ? "#0f172a" : "#f1f5f9",
+                        fontSize: "13px",
+                        outline: "none",
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", marginTop: "4px" }}>
+                  <span style={{ color: isLightMode ? "#475569" : "#94a3b8" }}>총 대기 건수</span>
+                  <span style={{ fontWeight: 800, color: "#4f46e5" }}>{cart.length}건</span>
+                </div>
+
+                <button
+                  onClick={() => handleSubmit()}
+                  disabled={submitting || cart.length === 0}
+                  style={{
+                    width: "100%",
+                    background: "#4f46e5",
+                    color: "#ffffff",
+                    border: "none",
+                    borderRadius: "12px",
+                    padding: "14px",
+                    fontSize: "14px",
+                    fontWeight: 800,
+                    cursor: "pointer",
+                    opacity: (submitting || cart.length === 0) ? 0.5 : 1,
+                    boxShadow: "0 4px 12px rgba(79,70,229,0.2)",
+                  }}
+                >
+                  {submitting ? "제출 처리 중..." : `대여/반납 최종 제출 (${cart.length}건)`}
+                </button>
+              </div>
+            </div>
           )}
         </div>
 
-        {connected && scriptUrl && (
-          <div style={{ marginTop: 20, background: "rgba(99, 102, 241, 0.08)", padding: 14, borderRadius: 10, border: "1px dashed rgba(99, 102, 241, 0.45)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#818cf8", display: "flex", alignItems: "center", gap: 4 }}>
-                  👥 타인/동료 기기 동기화 링크
+        {/* 상세 보기 및 대여 신청 모달 (바텀시트 스타일) */}
+        {selectedItem && (
+          <div
+            style={{
+              position: "fixed",
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: "rgba(2, 6, 17, 0.6)",
+              backdropFilter: "blur(4px)",
+              display: "flex",
+              alignItems: "flex-end",
+              justifyContent: "center",
+              zIndex: 1000,
+            }}
+            onClick={() => setSelectedItem(null)}
+          >
+            <div
+              style={{
+                width: "100%",
+                maxWidth: "500px",
+                background: isLightMode ? "#ffffff" : "#151d30",
+                borderTopLeftRadius: "24px",
+                borderTopRightRadius: "24px",
+                padding: "24px",
+                maxHeight: "85vh",
+                overflowY: "auto",
+                boxShadow: "0 -10px 25px rgba(0,0,0,0.15)",
+                display: "flex",
+                flexDirection: "column",
+                gap: "16px",
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div
+                style={{
+                  width: "40px",
+                  height: "4px",
+                  borderRadius: "2px",
+                  background: isLightMode ? "#cbd5e1" : "#475569",
+                  margin: "-12px auto 8px",
+                }}
+                onClick={() => setSelectedItem(null)}
+              />
+
+              {selectedItem.photo ? (
+                <div style={{ position: "relative", width: "100%", height: "200px", borderRadius: "16px", overflow: "hidden", background: isLightMode ? "#f1f5f9" : "#0f172a" }}>
+                  <img
+                    src={getGoogleDriveImageUrl(selectedItem.photo)}
+                    alt={selectedItem.name}
+                    referrerPolicy="no-referrer"
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      objectFit: "contain",
+                    }}
+                  />
                 </div>
-                <div style={{ fontSize: 11.5, color: TEXT_DIM, marginTop: 4, lineHeight: 1.5 }}>
-                  다른 사용자가 설정 변경 없이 내 구글 스프레드시트와 실시간 연동된 화면을 보게 하려면 아래 링크를 전달하세요!
+              ) : (
+                <div
+                  style={{
+                    width: "100%",
+                    height: "140px",
+                    borderRadius: "16px",
+                    background: "rgba(99,102,241,0.05)",
+                    color: "#6366f1",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "8px",
+                    fontSize: "13px",
+                  }}
+                >
+                  <Package size={36} />
+                  등록된 자재 사진이 없습니다.
+                </div>
+              )}
+
+              <div>
+                <div style={{ fontSize: "18px", fontWeight: 800, color: isLightMode ? "#0f172a" : "#f1f5f9", marginBottom: "4px" }}>
+                  {selectedItem.name}
+                </div>
+                {selectedItem.spec && (
+                  <div style={{ fontSize: "13px", color: isLightMode ? "#475569" : "#94a3b8", marginBottom: "8px" }}>
+                    규격: {selectedItem.spec}
+                  </div>
+                )}
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                  <span style={{ fontSize: "12px", fontWeight: 700, padding: "4px 10px", borderRadius: "8px", background: "rgba(99,102,241,0.1)", color: "#6366f1" }}>
+                    📍 위치: {selectedItem.location}
+                  </span>
+                  <span style={{ fontSize: "12px", fontWeight: 700, padding: "4px 10px", borderRadius: "8px", background: typeof selectedItem.stock === "number" && selectedItem.stock > 0 ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.1)", color: typeof selectedItem.stock === "number" && selectedItem.stock > 0 ? "#10b981" : "#ef4444" }}>
+                    📦 현재고: {selectedItem.stock === "N/A" || selectedItem.stock === null ? "N/A" : `${selectedItem.stock}개`}
+                  </span>
                 </div>
               </div>
-              <button
-                onClick={handleCopyShareLink}
-                style={{
-                  background: shareCopied ? OK : ACCENT,
-                  color: "#ffffff",
-                  border: "none",
-                  borderRadius: 6,
-                  padding: "8px 14px",
-                  fontSize: 12,
-                  fontWeight: 700,
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                  transition: "background 0.2s ease",
-                  boxShadow: "0 2px 4px rgba(0, 0, 0, 0.15)",
-                }}
-              >
-                {shareCopied ? "✓ 링크 복사 완료" : "공유 링크 복사"}
-              </button>
+
+              <div style={{ height: "1px", background: isLightMode ? "#e2e8f0" : "#222f4b" }} />
+
+              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <label style={{ fontSize: "11px", fontWeight: 700, color: isLightMode ? "#475569" : "#94a3b8" }}>구분</label>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", background: isLightMode ? "#f1f5f9" : "#0f172a", padding: "4px", borderRadius: "10px" }}>
+                    <button
+                      type="button"
+                      onClick={() => setActionType("대여")}
+                      style={{
+                        padding: "10px",
+                        borderRadius: "8px",
+                        fontSize: "13px",
+                        fontWeight: 700,
+                        background: actionType === "대여" ? "#4f46e5" : "transparent",
+                        color: actionType === "대여" ? "#ffffff" : (isLightMode ? "#475569" : "#94a3b8"),
+                      }}
+                    >
+                      📥 대여 신청
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActionType("반납")}
+                      style={{
+                        padding: "10px",
+                        borderRadius: "8px",
+                        fontSize: "13px",
+                        fontWeight: 700,
+                        background: actionType === "반납" ? "#10b981" : "transparent",
+                        color: actionType === "반납" ? "#ffffff" : (isLightMode ? "#475569" : "#94a3b8"),
+                      }}
+                    >
+                      🔄 반납 신청
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <label style={{ fontSize: "11px", fontWeight: 700, color: isLightMode ? "#475569" : "#94a3b8" }}>수량</label>
+                  <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                    <button
+                      type="button"
+                      onClick={() => setRentQty((prev) => Math.max(1, prev - 1))}
+                      style={{
+                        width: "44px",
+                        height: "44px",
+                        borderRadius: "10px",
+                        background: isLightMode ? "#f1f5f9" : "#0f172a",
+                        border: `1px solid ${isLightMode ? "#cbd5e1" : "#222f4b"}`,
+                        color: isLightMode ? "#0f172a" : "#f1f5f9",
+                        fontSize: "18px",
+                        fontWeight: "bold",
+                      }}
+                    >
+                      -
+                    </button>
+                    <input
+                      type="number"
+                      min={1}
+                      value={rentQty}
+                      onChange={(e) => setRentQty(Math.max(1, parseInt(e.target.value) || 1))}
+                      style={{
+                        flex: 1,
+                        height: "44px",
+                        textAlign: "center",
+                        background: isLightMode ? "#f8fafc" : "#0f172a",
+                        border: `1px solid ${isLightMode ? "#cbd5e1" : "#222f4b"}`,
+                        borderRadius: "10px",
+                        color: isLightMode ? "#0f172a" : "#f1f5f9",
+                        fontSize: "15px",
+                        fontWeight: "bold",
+                        outline: "none",
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (actionType === "대여" && typeof selectedItem.stock === "number" && rentQty >= selectedItem.stock) {
+                          showToast("재고를 초과하여 대여할 수 없습니다.", "warn");
+                          return;
+                        }
+                        setRentQty((prev) => prev + 1);
+                      }}
+                      style={{
+                        width: "44px",
+                        height: "44px",
+                        borderRadius: "10px",
+                        background: isLightMode ? "#f1f5f9" : "#0f172a",
+                        border: `1px solid ${isLightMode ? "#cbd5e1" : "#222f4b"}`,
+                        color: isLightMode ? "#0f172a" : "#f1f5f9",
+                        fontSize: "18px",
+                        fontWeight: "bold",
+                      }}
+                    >
+                      +
+                    </button>
+                  </div>
+                  {actionType === "대여" && typeof selectedItem.stock === "number" && selectedItem.stock < rentQty && (
+                    <span style={{ fontSize: "11px", color: "#ef4444", marginTop: "2px" }}>
+                      ⚠️ 재고({selectedItem.stock}개)를 초과했습니다.
+                    </span>
+                  )}
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <label style={{ fontSize: "11px", fontWeight: 700, color: isLightMode ? "#475569" : "#94a3b8" }}>특이사항 (용도 등)</label>
+                  <input
+                    type="text"
+                    placeholder="예: 실장 테스트용"
+                    value={noteInput}
+                    onChange={(e) => setNoteInput(e.target.value)}
+                    style={{
+                      width: "100%",
+                      background: isLightMode ? "#f8fafc" : "#0f172a",
+                      border: `1px solid ${isLightMode ? "#cbd5e1" : "#222f4b"}`,
+                      borderRadius: "10px",
+                      padding: "10px 12px",
+                      color: isLightMode ? "#0f172a" : "#f1f5f9",
+                      fontSize: "13px",
+                      outline: "none",
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: "12px", marginTop: "8px" }}>
+                <button
+                  type="button"
+                  onClick={() => setSelectedItem(null)}
+                  style={{
+                    flex: 1,
+                    background: isLightMode ? "#f1f5f9" : "#222f4b",
+                    color: isLightMode ? "#475569" : "#f1f5f9",
+                    border: "none",
+                    borderRadius: "12px",
+                    padding: "12px",
+                    fontSize: "14px",
+                    fontWeight: 700,
+                  }}
+                >
+                  닫기
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAddToCart}
+                  disabled={actionType === "대여" && typeof selectedItem.stock === "number" && rentQty > selectedItem.stock}
+                  style={{
+                    flex: 2,
+                    background: actionType === "대여" ? "#4f46e5" : "#10b981",
+                    color: "#ffffff",
+                    border: "none",
+                    borderRadius: "12px",
+                    padding: "12px",
+                    fontSize: "14px",
+                    fontWeight: 700,
+                    opacity: (actionType === "대여" && typeof selectedItem.stock === "number" && rentQty > selectedItem.stock) ? 0.5 : 1,
+                  }}
+                >
+                  신청 목록에 담기
+                </button>
+              </div>
             </div>
           </div>
         )}
 
-        {!connected && (
-          <div style={{ fontSize: 11.5, color: TEXT_DIM, marginTop: 14, lineHeight: 1.6, textAlign: "center" }}>
-            연동을 하지 않고도 우측 상단의 ✕ 를 눌러 데모 데이터로 가상 테스트를 진행할 수 있습니다.
+        {/* 하단 탭 바 */}
+        <nav
+          style={{
+            position: "fixed",
+            bottom: 0,
+            left: 0,
+            right: 0,
+            height: "64px",
+            background: isLightMode ? "#ffffff" : "#151d30",
+            borderTop: `1px solid ${isLightMode ? "#e2e8f0" : "#222f4b"}`,
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            zIndex: 100,
+          }}
+        >
+          <button
+            onClick={() => setActiveTab("lookup")}
+            style={{
+              background: "none",
+              border: "none",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "4px",
+              color: activeTab === "lookup" ? "#4f46e5" : (isLightMode ? "#64748b" : "#94a3b8"),
+              fontSize: "12px",
+              fontWeight: activeTab === "lookup" ? 800 : 500,
+              cursor: "pointer",
+            }}
+          >
+            <Search size={20} />
+            자재 검색
+          </button>
+          
+          <button
+            onClick={() => setActiveTab("cart")}
+            style={{
+              background: "none",
+              border: "none",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "4px",
+              color: activeTab === "cart" ? "#4f46e5" : (isLightMode ? "#64748b" : "#94a3b8"),
+              fontSize: "12px",
+              fontWeight: activeTab === "cart" ? 800 : 500,
+              cursor: "pointer",
+              position: "relative",
+            }}
+          >
+            <div style={{ position: "relative" }}>
+              <ShoppingCart size={20} />
+              {cart.length > 0 && (
+                <span
+                  style={{
+                    position: "absolute",
+                    top: "-6px",
+                    right: "-10px",
+                    background: "#ef4444",
+                    color: "#ffffff",
+                    fontSize: "10px",
+                    fontWeight: "bold",
+                    borderRadius: "10px",
+                    padding: "1px 6px",
+                    minWidth: "16px",
+                    textAlign: "center",
+                  }}
+                >
+                  {cart.length}
+                </span>
+              )}
+            </div>
+            신청 대기
+          </button>
+        </nav>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        background: isLightMode ? "#f8fafc" : "#0b0f19",
+        color: isLightMode ? "#0f172a" : "#f1f5f9",
+        padding: "40px 20px",
+        fontFamily: "var(--font-sans, system-ui, sans-serif)",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+      }}
+    >
+      {/* 뒤로가기 버튼 */}
+      <div style={{ maxWidth: "1000px", width: "100%", marginBottom: "24px", display: "flex", justifyContent: "flex-start" }}>
+        <button
+          onClick={onBack}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+            background: isLightMode ? "#ffffff" : "#1e293b",
+            border: `1px solid ${isLightMode ? "#e2e8f0" : "#334155"}`,
+            color: isLightMode ? "#475569" : "#94a3b8",
+            fontSize: "13px",
+            fontWeight: 700,
+            cursor: "pointer",
+            padding: "10px 16px",
+            borderRadius: "12px",
+            boxShadow: "0 1px 2px 0 rgba(0, 0, 0, 0.05)",
+            transition: "all 0.2s",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.transform = "translateX(-2px)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.transform = "translateX(0)";
+          }}
+        >
+          <ArrowLeft size={16} />
+          처음 화면으로
+        </button>
+      </div>
+
+      {/* 실시간 연동 상태 바 */}
+      <div
+        style={{
+          maxWidth: "1000px",
+          width: "100%",
+          background: connected ? "rgba(16, 185, 129, 0.08)" : "rgba(245, 158, 11, 0.08)",
+          border: connected ? "1px solid rgba(16, 185, 129, 0.25)" : "1px solid rgba(245, 158, 11, 0.25)",
+          borderRadius: "14px",
+          padding: "12px 20px",
+          marginBottom: "24px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: "12px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <span
+            style={{
+              width: "10px",
+              height: "10px",
+              borderRadius: "50%",
+              background: connected ? "#10b981" : "#f59e0b",
+              boxShadow: connected ? "0 0 10px #10b981" : "0 0 10px #f59e0b",
+              display: "inline-block",
+            }}
+          />
+          <div style={{ fontSize: "13px" }}>
+            <span style={{ fontWeight: 700, color: connected ? (isLightMode ? "#047857" : "#34d399") : (isLightMode ? "#b45309" : "#fbbf24"), marginRight: "8px" }}>
+              {connected ? "구글 시트 실시간 연동 활성화" : "데모 가상 모드 작동 중"}
+            </span>
+            <span style={{ color: isLightMode ? "#475569" : "#94a3b8", fontSize: "12px" }}>
+              {connected 
+                ? `(10초 주기 실시간 자동 동기화 중 | 최근 동기화: ${lastSync ? lastSync.toLocaleTimeString() : "진행 중..."})`
+                : "(스프레드시트 미연동 상태로, 기록이 파일에 보존되지 않습니다)"}
+            </span>
           </div>
-        )}
+        </div>
+        <button
+          onClick={onOpenSetup}
+          style={{
+            background: connected ? "rgba(99, 102, 241, 0.15)" : "#f59e0b",
+            color: connected ? "#6366f1" : "#ffffff",
+            border: "none",
+            borderRadius: "8px",
+            padding: "6px 14px",
+            fontSize: "12px",
+            fontWeight: 700,
+            cursor: "pointer",
+            transition: "all 0.2s",
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-1px)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; }}
+        >
+          {connected ? "연동 설정 확인" : "구글 시트 연동 설정하기"}
+        </button>
+      </div>
+
+      <div
+        style={{
+          maxWidth: "1000px",
+          width: "100%",
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
+          gap: "32px",
+        }}
+      >
+        {/* 왼쪽: 대여/반납 신청 폼 */}
+        <div
+          style={{
+            background: isLightMode ? "#ffffff" : "#151d30",
+            border: `1px solid ${isLightMode ? "#e2e8f0" : "#222f4b"}`,
+            borderRadius: "24px",
+            padding: "32px",
+            boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.05)",
+          }}
+        >
+          <h2 style={{ fontSize: "20px", fontWeight: 800, color: isLightMode ? "#0f172a" : "#f1f5f9", marginBottom: "8px" }}>
+            📋 대여 및 반납 신청서
+          </h2>
+          <p style={{ fontSize: "12px", color: isLightMode ? "#64748b" : "#94a3b8", marginBottom: "24px" }}>
+            필요한 자재의 대여 또는 반납을 신청하면 실시간으로 재고가 정산됩니다.
+          </p>
+
+          <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+            
+            {/* 대여 / 반납 토글 */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "11px", fontWeight: 700, color: isLightMode ? "#475569" : "#94a3b8" }}>
+                구분
+              </label>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", background: isLightMode ? "#f1f5f9" : "#0f172a", padding: "4px", borderRadius: "10px" }}>
+                <button
+                  type="button"
+                  onClick={() => setActionType("대여")}
+                  style={{
+                    padding: "8px",
+                    borderRadius: "8px",
+                    fontSize: "13px",
+                    fontWeight: 700,
+                    border: "none",
+                    cursor: "pointer",
+                    background: actionType === "대여" ? "#4f46e5" : "transparent",
+                    color: actionType === "대여" ? "#ffffff" : (isLightMode ? "#475569" : "#94a3b8"),
+                    transition: "all 0.2s",
+                  }}
+                >
+                  📥 자재 대여
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActionType("반납")}
+                  style={{
+                    padding: "8px",
+                    borderRadius: "8px",
+                    fontSize: "13px",
+                    fontWeight: 700,
+                    border: "none",
+                    cursor: "pointer",
+                    background: actionType === "반납" ? "#10b981" : "transparent",
+                    color: actionType === "반납" ? "#ffffff" : (isLightMode ? "#475569" : "#94a3b8"),
+                    transition: "all 0.2s",
+                  }}
+                >
+                  🔄 자재 반납
+                </button>
+              </div>
+            </div>
+
+            {/* 대여자 담당자 이름 */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "11px", fontWeight: 700, color: isLightMode ? "#475569" : "#94a3b8" }}>
+                대여/반납 담당자 <span style={{ color: "#ef4444" }}>*</span>
+              </label>
+              <div style={{ position: "relative" }}>
+                <User size={16} style={{ position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)", color: isLightMode ? "#94a3b8" : "#64748b" }} />
+                <input
+                  type="text"
+                  placeholder="예: 홍길동"
+                  value={rentUser}
+                  onChange={(e) => setRentUser(e.target.value)}
+                  style={{
+                    width: "100%",
+                    background: isLightMode ? "#f8fafc" : "#0f172a",
+                    border: `1px solid ${isLightMode ? "#cbd5e1" : "#222f4b"}`,
+                    borderRadius: "10px",
+                    padding: "10px 12px 10px 38px",
+                    color: isLightMode ? "#0f172a" : "#f1f5f9",
+                    fontSize: "13px",
+                    outline: "none",
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* 대여 품목 선택 드롭다운 및 검색창 */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <label style={{ fontSize: "11px", fontWeight: 700, color: isLightMode ? "#475569" : "#94a3b8" }}>
+                  품목 검색 및 선택 <span style={{ color: "#ef4444" }}>*</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsCustomMode(!isCustomMode);
+                    setSelectedItem(null);
+                  }}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "#6366f1",
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    textDecoration: "underline",
+                    padding: 0,
+                  }}
+                >
+                  {isCustomMode ? "🔍 기존 리스트에서 선택" : "✏️ 리스트에 없는 새 물건 입력"}
+                </button>
+              </div>
+              
+              {isCustomMode ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: "10px", background: isLightMode ? "rgba(99, 102, 241, 0.03)" : "rgba(99, 102, 241, 0.05)", padding: "14px", borderRadius: "12px", border: `1px dashed ${isLightMode ? "#cbd5e1" : "#334155"}` }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                    <span style={{ fontSize: "10px", fontWeight: 700, color: isLightMode ? "#475569" : "#94a3b8" }}>임시 품목명</span>
+                    <input
+                      type="text"
+                      placeholder="예: 특수 고정용 고무 밴드"
+                      value={customName}
+                      onChange={(e) => setCustomName(e.target.value)}
+                      style={{
+                        width: "100%",
+                        background: isLightMode ? "#ffffff" : "#0f172a",
+                        border: `1px solid ${isLightMode ? "#cbd5e1" : "#222f4b"}`,
+                        borderRadius: "8px",
+                        padding: "8px 12px",
+                        color: isLightMode ? "#0f172a" : "#f1f5f9",
+                        fontSize: "13px",
+                        outline: "none",
+                      }}
+                    />
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                    <span style={{ fontSize: "10px", fontWeight: 700, color: isLightMode ? "#475569" : "#94a3b8" }}>보관 위치</span>
+                    <input
+                      type="text"
+                      placeholder="예: 기타, N/A, A-1-1"
+                      value={customLocation}
+                      onChange={(e) => setCustomLocation(e.target.value)}
+                      style={{
+                        width: "100%",
+                        background: isLightMode ? "#ffffff" : "#0f172a",
+                        border: `1px solid ${isLightMode ? "#cbd5e1" : "#222f4b"}`,
+                        borderRadius: "8px",
+                        padding: "8px 12px",
+                        color: isLightMode ? "#0f172a" : "#f1f5f9",
+                        fontSize: "13px",
+                        outline: "none",
+                      }}
+                    />
+                  </div>
+                  <p style={{ fontSize: "10.5px", color: isLightMode ? "#64748b" : "#94a3b8", lineHeight: "1.4", margin: 0 }}>
+                    ⚠️ 입력하신 물품명과 위치는 <strong>일회성 로그</strong>에만 기록되며, 메인 창고 자재 마스터 목록에는 저장되지 않습니다.
+                  </p>
+                </div>
+              ) : (
+                <div ref={dropdownRef} style={{ position: "relative" }}>
+                {/* 검색 필드 */}
+                <div style={{ position: "relative", marginBottom: "4px" }}>
+                  <Search size={16} style={{ position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)", color: isLightMode ? "#94a3b8" : "#64748b" }} />
+                  <input
+                    type="text"
+                    placeholder="품목 이름, 규격 또는 위치 검색..."
+                    value={searchQuery}
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value);
+                      setIsDropdownOpen(true);
+                    }}
+                    onFocus={() => setIsDropdownOpen(true)}
+                    style={{
+                      width: "100%",
+                      background: isLightMode ? "#f8fafc" : "#0f172a",
+                      border: `1px solid ${isLightMode ? "#cbd5e1" : "#222f4b"}`,
+                      borderRadius: "10px",
+                      padding: "10px 12px 10px 38px",
+                      color: isLightMode ? "#0f172a" : "#f1f5f9",
+                      fontSize: "13px",
+                      outline: "none",
+                    }}
+                  />
+                </div>
+
+                {/* 선택된 품목 트리거 버튼 (드롭다운 열기/닫기) */}
+                <button
+                  type="button"
+                  onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                  style={{
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    background: isLightMode ? "#f8fafc" : "#0f172a",
+                    border: `1px solid ${isLightMode ? "#cbd5e1" : "#222f4b"}`,
+                    borderRadius: "10px",
+                    padding: "12px",
+                    color: selectedItem ? (isLightMode ? "#0f172a" : "#f1f5f9") : (isLightMode ? "#94a3b8" : "#64748b"),
+                    fontSize: "13px",
+                    textAlign: "left",
+                    cursor: "pointer",
+                  }}
+                >
+                  {selectedItem ? (
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                      {selectedItem.photo ? (
+                        <img
+                          src={getGoogleDriveImageUrl(selectedItem.photo)}
+                          alt={selectedItem.name}
+                          referrerPolicy="no-referrer"
+                          style={{
+                            width: "30px",
+                            height: "30px",
+                            borderRadius: "6px",
+                            objectFit: "cover",
+                            border: "1px solid rgba(0,0,0,0.1)",
+                          }}
+                        />
+                      ) : (
+                        <div
+                          style={{
+                            width: "30px",
+                            height: "30px",
+                            borderRadius: "6px",
+                            background: "rgba(99,102,241,0.1)",
+                            color: "#6366f1",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                        >
+                          <Package size={16} />
+                        </div>
+                      )}
+                      <div>
+                        <div style={{ fontWeight: 700 }}>{selectedItem.name}</div>
+                        <div style={{ fontSize: "11px", color: isLightMode ? "#64748b" : "#94a3b8" }}>
+                          위치: {selectedItem.location} | 재고: {selectedItem.stock === "N/A" || selectedItem.stock === null ? "N/A" : `${selectedItem.stock}개`}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <span>--- 대여할 품목을 선택해 주세요 ---</span>
+                  )}
+                  <ChevronDown size={16} style={{ color: isLightMode ? "#64748b" : "#94a3b8" }} />
+                </button>
+
+                {/* 커스텀 이미지 드롭다운 메뉴 */}
+                {isDropdownOpen && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: "100%",
+                      left: 0,
+                      right: 0,
+                      background: isLightMode ? "#ffffff" : "#1e293b",
+                      border: `1px solid ${isLightMode ? "#cbd5e1" : "#334155"}`,
+                      borderRadius: "12px",
+                      marginTop: "6px",
+                      maxHeight: "260px",
+                      overflowY: "auto",
+                      zIndex: 1000,
+                      boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.2)",
+                    }}
+                  >
+                    {searchQuery.trim() !== "" && (
+                      <div
+                        onClick={() => {
+                          const tempItem: InventoryItem = {
+                            rowIndex: -1,
+                            location: "기타",
+                            photo: "",
+                            name: searchQuery.trim(),
+                            link: "N/A",
+                            stock: "N/A",
+                            updatedAt: "",
+                            manager: "",
+                            note: "리스트 외 임시 품목",
+                            spec: "",
+                          };
+                          handleSelectItem(tempItem);
+                        }}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "12px",
+                          padding: "10px 12px",
+                          borderBottom: `1px solid ${isLightMode ? "#cbd5e1" : "#334155"}`,
+                          cursor: "pointer",
+                          background: isLightMode ? "rgba(99, 102, 241, 0.05)" : "rgba(99, 102, 241, 0.12)",
+                          color: "#6366f1",
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: "36px",
+                            height: "36px",
+                            borderRadius: "8px",
+                            background: "rgba(99, 102, 241, 0.15)",
+                            color: "#6366f1",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            fontSize: "14px"
+                          }}
+                        >
+                          ➕
+                        </div>
+                        <div style={{ textAlign: "left" }}>
+                          <div style={{ fontSize: "13px", fontWeight: 700 }}>
+                            "{searchQuery.trim()}" (새 임시 물품으로 직접 대여/반납 신청)
+                          </div>
+                          <div style={{ fontSize: "11px", color: isLightMode ? "#64748b" : "#94a3b8" }}>
+                            목록에 없으므로 임시 지정하여 대여/반납 목록에 추가합니다.
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {filteredItems.length === 0 ? (
+                      searchQuery.trim() === "" ? (
+                        <div style={{ padding: "16px", textAlign: "center", fontSize: "12px", color: isLightMode ? "#64748b" : "#94a3b8" }}>
+                          일치하는 자재 품목이 없습니다.
+                        </div>
+                      ) : null
+                    ) : (
+                      filteredItems.map((item) => {
+                        const isSelected = selectedItem?.rowIndex === item.rowIndex;
+                        return (
+                          <div
+                            key={item.rowIndex}
+                            onClick={() => handleSelectItem(item)}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "space-between",
+                              padding: "10px 12px",
+                              borderBottom: `1px solid ${isLightMode ? "#f1f5f9" : "#222f4b"}`,
+                              cursor: "pointer",
+                              background: isSelected
+                                ? "rgba(99,102,241,0.08)"
+                                : "transparent",
+                              transition: "background 0.2s",
+                            }}
+                            onMouseEnter={(e) => {
+                              if (!isSelected) e.currentTarget.style.background = isLightMode ? "#f8fafc" : "#273549";
+                            }}
+                            onMouseLeave={(e) => {
+                              if (!isSelected) e.currentTarget.style.background = "transparent";
+                            }}
+                          >
+                            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                              {item.photo ? (
+                                <img
+                                  src={getGoogleDriveImageUrl(item.photo)}
+                                  alt={item.name}
+                                  referrerPolicy="no-referrer"
+                                  style={{
+                                    width: "36px",
+                                    height: "36px",
+                                    borderRadius: "8px",
+                                    objectFit: "cover",
+                                    border: "1px solid rgba(0,0,0,0.1)",
+                                  }}
+                                />
+                              ) : (
+                                <div
+                                  style={{
+                                    width: "36px",
+                                    height: "36px",
+                                    borderRadius: "8px",
+                                    background: "rgba(99,102,241,0.08)",
+                                    color: "#6366f1",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                  }}
+                                >
+                                  <Package size={18} />
+                                </div>
+                              )}
+                              <div style={{ textAlign: "left" }}>
+                                <div style={{ fontSize: "13px", fontWeight: 700, color: isLightMode ? "#1e293b" : "#f1f5f9" }}>{item.name}</div>
+                                <div style={{ fontSize: "11px", color: isLightMode ? "#64748b" : "#94a3b8" }}>
+                                  위치: <span style={{ color: "#6366f1", fontWeight: 600 }}>{item.location}</span> | 재고: <span style={{ color: "#10b981", fontWeight: 600 }}>{item.stock ?? 0}개</span>
+                                </div>
+                              </div>
+                            </div>
+                            {isSelected && <Check size={16} style={{ color: "#6366f1" }} />}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+              </div>
+              )}
+            </div>
+
+            {/* 수량 입력 */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "11px", fontWeight: 700, color: isLightMode ? "#475569" : "#94a3b8" }}>
+                대여/반납 수량 <span style={{ color: "#ef4444" }}>*</span>
+              </label>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <button
+                  type="button"
+                  onClick={() => setRentQty((prev) => Math.max(1, prev - 1))}
+                  style={{
+                    padding: "10px",
+                    borderRadius: "10px",
+                    background: isLightMode ? "#f1f5f9" : "#0f172a",
+                    border: `1px solid ${isLightMode ? "#cbd5e1" : "#222f4b"}`,
+                    color: isLightMode ? "#475569" : "#f1f5f9",
+                    cursor: "pointer",
+                    fontSize: "14px",
+                    fontWeight: "bold",
+                    width: "40px",
+                  }}
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  min={1}
+                  value={rentQty}
+                  onChange={(e) => setRentQty(Math.max(1, parseInt(e.target.value) || 1))}
+                  style={{
+                    flex: 1,
+                    textAlign: "center",
+                    background: isLightMode ? "#f8fafc" : "#0f172a",
+                    border: `1px solid ${isLightMode ? "#cbd5e1" : "#222f4b"}`,
+                    borderRadius: "10px",
+                    padding: "10px 12px",
+                    color: isLightMode ? "#0f172a" : "#f1f5f9",
+                    fontSize: "13px",
+                    outline: "none",
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (actionType === "대여" && selectedItem && rentQty >= (selectedItem.stock ?? 0)) {
+                      showToast("재고를 초과할 수 없습니다.", "warn");
+                      return;
+                    }
+                    setRentQty((prev) => prev + 1);
+                  }}
+                  style={{
+                    padding: "10px",
+                    borderRadius: "10px",
+                    background: isLightMode ? "#f1f5f9" : "#0f172a",
+                    border: `1px solid ${isLightMode ? "#cbd5e1" : "#222f4b"}`,
+                    color: isLightMode ? "#475569" : "#f1f5f9",
+                    cursor: "pointer",
+                    fontSize: "14px",
+                    fontWeight: "bold",
+                    width: "40px",
+                  }}
+                >
+                  +
+                </button>
+              </div>
+              {actionType === "대여" && selectedItem && (selectedItem.stock ?? 0) < rentQty && (
+                <span style={{ fontSize: "11px", color: "#ef4444", marginTop: "2px" }}>
+                  ⚠️ 현재고({selectedItem.stock ?? 0}개)를 초과했습니다. 대여 신청을 완료할 수 없습니다.
+                </span>
+              )}
+            </div>
+
+            {/* 특이사항 / 대여 용도 */}
+            {/* 장바구니 담기 버튼 */}
+            <button
+              type="button"
+              onClick={handleAddToCart}
+              disabled={submitting}
+              style={{
+                width: "100%",
+                background: actionType === "대여" ? "#4f46e5" : "#10b981",
+                color: "#ffffff",
+                border: "none",
+                borderRadius: "12px",
+                padding: "12px",
+                fontSize: "14px",
+                fontWeight: 700,
+                cursor: "pointer",
+                transition: "all 0.2s",
+                boxShadow: `0 4px 14px ${actionType === "대여" ? "rgba(79, 70, 229, 0.3)" : "rgba(16, 185, 129, 0.3)"}`,
+                opacity: submitting ? 0.5 : 1,
+                marginTop: "10px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "6px"
+              }}
+            >
+              <Check size={16} />
+              신청 목록에 담기
+            </button>
+          </form>
+        </div>
+
+        {/* 오른쪽: 신청 목록 장바구니 (Cart) 및 최종 제출 */}
+        <div
+          style={{
+            background: isLightMode ? "#ffffff" : "#151d30",
+            border: `1px solid ${isLightMode ? "#e2e8f0" : "#222f4b"}`,
+            borderRadius: "24px",
+            padding: "32px",
+            boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.05)",
+            display: "flex",
+            flexDirection: "column",
+            gap: "24px",
+          }}
+        >
+          {/* 장바구니 영역 */}
+          <div>
+            <h2 style={{ fontSize: "20px", fontWeight: 800, color: isLightMode ? "#0f172a" : "#f1f5f9", marginBottom: "8px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span>🛒 대여/반납 신청 대기 목록</span>
+              {cart.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setCart([])}
+                  style={{
+                    background: "transparent",
+                    color: "#ef4444",
+                    border: "none",
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    cursor: "pointer"
+                  }}
+                >
+                  비우기
+                </button>
+              )}
+            </h2>
+            <p style={{ fontSize: "12px", color: isLightMode ? "#64748b" : "#94a3b8", marginBottom: "16px" }}>
+              왼쪽에서 품목을 입력해 담은 후, 아래 제출 버튼을 클릭해 최종 접수하세요.
+            </p>
+
+            {cart.length === 0 ? (
+              <div
+                style={{
+                  border: `2px dashed ${isLightMode ? "#cbd5e1" : "#222f4b"}`,
+                  borderRadius: "16px",
+                  padding: "40px 20px",
+                  textAlign: "center",
+                  color: isLightMode ? "#94a3b8" : "#475569",
+                  fontSize: "13px",
+                }}
+              >
+                <Package size={36} style={{ margin: "0 auto 8px", opacity: 0.5 }} />
+                신청 대기 목록이 비어 있습니다.
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: "10px", maxHeight: "240px", overflowY: "auto", paddingRight: "4px" }}>
+                {cart.map((c) => (
+                  <div
+                    key={c.id}
+                    style={{
+                      background: isLightMode ? "#f8fafc" : "#0f172a",
+                      border: `1px solid ${isLightMode ? "#e2e8f0" : "#222f4b"}`,
+                      borderRadius: "14px",
+                      padding: "12px 16px",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: "14px", fontWeight: 800, color: isLightMode ? "#1e293b" : "#f1f5f9" }}>
+                        {c.item.name}
+                      </div>
+                      <div style={{ display: "flex", gap: "10px", fontSize: "11px", color: isLightMode ? "#64748b" : "#94a3b8", marginTop: "4px" }}>
+                        <span
+                          style={{
+                            fontWeight: 800,
+                            color: c.type === "대여" ? "#4f46e5" : "#10b981",
+                          }}
+                        >
+                          [{c.type}]
+                        </span>
+                        <span>{c.qty}개</span>
+                        <span>위치: {c.item.location}</span>
+                      </div>
+                      {c.note && (
+                        <div style={{ fontSize: "11px", color: isLightMode ? "#94a3b8" : "#64748b", marginTop: "2px", fontStyle: "italic" }}>
+                          사유: {c.note}
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveFromCart(c.id)}
+                      style={{
+                        background: "rgba(239, 68, 68, 0.1)",
+                        color: "#ef4444",
+                        border: "none",
+                        width: "28px",
+                        height: "28px",
+                        borderRadius: "8px",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontWeight: "bold",
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* 최종 제출 폼 */}
+          <form onSubmit={handleSubmit} style={{ marginTop: "auto", borderTop: `1px solid ${isLightMode ? "#e2e8f0" : "#222f4b"}`, paddingTop: "24px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "16px", fontSize: "14px" }}>
+              <span style={{ fontWeight: 700, color: isLightMode ? "#475569" : "#94a3b8" }}>총 대기 품목</span>
+              <span style={{ fontWeight: 800, color: "#4f46e5" }}>{cart.length}개 건</span>
+            </div>
+
+            <button
+              type="submit"
+              disabled={submitting || cart.length === 0}
+              style={{
+                width: "100%",
+                background: "#4f46e5",
+                color: "#ffffff",
+                border: "none",
+                borderRadius: "14px",
+                padding: "14px",
+                fontSize: "15px",
+                fontWeight: 800,
+                cursor: (submitting || cart.length === 0) ? "not-allowed" : "pointer",
+                boxShadow: "0 10px 15px -3px rgba(79, 70, 229, 0.3)",
+                opacity: (submitting || cart.length === 0) ? 0.5 : 1,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "8px"
+              }}
+            >
+              {submitting ? "구글 시트 전송 중..." : `대여/반납 신청서 일괄 제출하기 (총 ${cart.length}건)`}
+            </button>
+          </form>
+
+          <div style={{ height: "1px", background: isLightMode ? "#e2e8f0" : "#222f4b" }} />
+
+          {/* 선택한 품목 상세 요약 (간략히 제공) */}
+          {selectedItem ? (
+            <div
+              style={{
+                background: isLightMode ? "#f8fafc" : "#0f172a",
+                border: `1px solid ${isLightMode ? "#cbd5e1" : "#222f4b"}`,
+                borderRadius: "16px",
+                padding: "16px",
+                display: "flex",
+                gap: "12px",
+                alignItems: "center"
+              }}
+            >
+              {selectedItem.photo ? (
+                <img
+                  src={getGoogleDriveImageUrl(selectedItem.photo)}
+                  alt={selectedItem.name}
+                  referrerPolicy="no-referrer"
+                  style={{
+                    width: "50px",
+                    height: "50px",
+                    borderRadius: "8px",
+                    objectFit: "cover",
+                  }}
+                />
+              ) : (
+                <div
+                  style={{
+                    width: "50px",
+                    height: "50px",
+                    borderRadius: "8px",
+                    background: isLightMode ? "#e2e8f0" : "#1e293b",
+                    color: isLightMode ? "#64748b" : "#94a3b8",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center"
+                  }}
+                >
+                  <Package size={20} />
+                </div>
+              )}
+              <div style={{ textAlign: "left" }}>
+                <div style={{ fontSize: "11px", color: "#6366f1", fontWeight: 700 }}>🔍 선택된 자재 사양</div>
+                <div style={{ fontSize: "13px", fontWeight: 800 }}>{selectedItem.name}</div>
+                <div style={{ fontSize: "11px", color: isLightMode ? "#64748b" : "#94a3b8" }}>
+                  위치: {selectedItem.location} | 현재고: {selectedItem.stock ?? 0}개
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: "11px", color: isLightMode ? "#94a3b8" : "#475569", textAlign: "center" }}>
+              품목을 선택하면 해당 자재 정보의 요약이 여기에 표출됩니다.
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
