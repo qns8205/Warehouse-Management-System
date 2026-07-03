@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { WmsUser } from "../types";
-import { Lock, User, RefreshCw, KeyRound, Eye, ShieldAlert, MonitorSmartphone } from "lucide-react";
+import { Lock, User, RefreshCw, KeyRound, Eye, ShieldAlert } from "lucide-react";
 
 interface LoginPageProps {
   users: WmsUser[];
@@ -31,7 +31,7 @@ export default function LoginPage({
     setLocalError("");
 
     if (isMobile) {
-      setLocalError("관리자 모드는 태블릿 또는 PC 환경에서만 이용할 수 있습니다.");
+      setLocalError("관리자 모드는 PC 또는 태블릿 환경에서만 접속할 수 있습니다.");
       return;
     }
 
@@ -181,19 +181,19 @@ export default function LoginPage({
           {/* Right Choice Card: Admin Mode */}
           <button
             type="button"
+            disabled={isMobile}
             onClick={() => {
-              if (isMobile) {
-                setLocalError("관리자 모드는 태블릿 또는 PC 환경에서만 이용할 수 있습니다.");
-                return;
-              }
+              if (isMobile) return;
               setSelectedMode("admin");
               setLocalError("");
             }}
             style={{
-              background: selectedMode === "admin"
+              background: isMobile
+                ? "transparent"
+                : selectedMode === "admin"
                 ? (isLightMode ? "rgba(99, 102, 241, 0.05)" : "rgba(99, 102, 241, 0.15)")
                 : "transparent",
-              border: `2px solid ${selectedMode === "admin" ? ACCENT : BORDER_COLOR}`,
+              border: `2px solid ${!isMobile && selectedMode === "admin" ? ACCENT : BORDER_COLOR}`,
               borderRadius: "20px",
               padding: "32px 20px",
               cursor: isMobile ? "not-allowed" : "pointer",
@@ -203,22 +203,18 @@ export default function LoginPage({
               alignItems: "center",
               gap: "14px",
               transition: "all 0.2s ease-in-out",
-              opacity: isMobile ? 0.55 : 1,
-              boxShadow: selectedMode === "admin" ? `0 10px 25px ${isLightMode ? "rgba(99, 102, 241, 0.15)" : "rgba(99, 102, 241, 0.3)"}` : "none",
+              opacity: isMobile ? 0.5 : 1,
+              boxShadow: !isMobile && selectedMode === "admin" ? `0 10px 25px ${isLightMode ? "rgba(99, 102, 241, 0.15)" : "rgba(99, 102, 241, 0.3)"}` : "none",
             }}
             onMouseEnter={(e) => {
-              if (isMobile) return;
-              if (selectedMode !== "admin") {
-                e.currentTarget.style.borderColor = ACCENT;
-                e.currentTarget.style.background = isLightMode ? "rgba(99, 102, 241, 0.02)" : "rgba(255, 255, 255, 0.03)";
-              }
+              if (isMobile || selectedMode === "admin") return;
+              e.currentTarget.style.borderColor = ACCENT;
+              e.currentTarget.style.background = isLightMode ? "rgba(99, 102, 241, 0.02)" : "rgba(255, 255, 255, 0.03)";
             }}
             onMouseLeave={(e) => {
-              if (isMobile) return;
-              if (selectedMode !== "admin") {
-                e.currentTarget.style.borderColor = BORDER_COLOR;
-                e.currentTarget.style.background = "transparent";
-              }
+              if (isMobile || selectedMode === "admin") return;
+              e.currentTarget.style.borderColor = BORDER_COLOR;
+              e.currentTarget.style.background = "transparent";
             }}
           >
             <div
@@ -226,15 +222,15 @@ export default function LoginPage({
                 width: "56px",
                 height: "56px",
                 borderRadius: "50%",
-                background: selectedMode === "admin" ? ACCENT : (isLightMode ? "#e2e8f0" : "#334155"),
-                color: selectedMode === "admin" ? "#ffffff" : TEXT_DIM,
+                background: !isMobile && selectedMode === "admin" ? ACCENT : (isLightMode ? "#e2e8f0" : "#334155"),
+                color: !isMobile && selectedMode === "admin" ? "#ffffff" : TEXT_DIM,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 transition: "all 0.2s",
               }}
             >
-              {isMobile ? <Lock size={26} /> : <ShieldAlert size={26} />}
+              <ShieldAlert size={26} />
             </div>
             <div>
               <div style={{ fontSize: "16px", fontWeight: 800, color: TEXT_MAIN, marginBottom: "4px" }}>
@@ -243,10 +239,8 @@ export default function LoginPage({
               <div style={{ fontSize: "11.5px", color: TEXT_DIM, lineHeight: "1.4" }}>
                 {isMobile ? (
                   <>
-                    태블릿 또는 PC 환경에서만 이용 가능<br />
-                    <span style={{ color: "#f59e0b", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: "4px" }}>
-                      <MonitorSmartphone size={12} /> 모바일에서는 제한됨
-                    </span>
+                    PC 또는 태블릿에서만 이용 가능<br />
+                    <span style={{ color: "#f59e0b", fontWeight: 600 }}>🔒 모바일 접속 제한</span>
                   </>
                 ) : (
                   <>
@@ -258,6 +252,25 @@ export default function LoginPage({
             </div>
           </button>
         </div>
+
+        {isMobile && (
+          <div
+            style={{
+              fontSize: "12px",
+              color: "#f59e0b",
+              background: "rgba(245, 158, 11, 0.08)",
+              border: "1px solid rgba(245, 158, 11, 0.2)",
+              borderRadius: "12px",
+              padding: "12px 14px",
+              marginBottom: "24px",
+              textAlign: "center",
+              lineHeight: 1.5,
+            }}
+          >
+            🔒 관리자 모드는 재고 편집 등 민감한 기능을 포함하고 있어 PC 또는 태블릿 환경에서만 접속할 수 있습니다.<br />
+            모바일에서는 열람용 모드를 이용해 주세요.
+          </div>
+        )}
 
         {/* Dynamic Panel based on selection */}
         {selectedMode === "admin" && !isMobile && (
@@ -386,27 +399,6 @@ export default function LoginPage({
               🔐 관리자 로그인 및 모니터링 진입
             </button>
           </form>
-        )}
-
-        {isMobile && (localError || selectedMode === "admin") && (
-          <div
-            style={{
-              fontSize: "12px",
-              color: "#f59e0b",
-              background: "rgba(245, 158, 11, 0.08)",
-              padding: "10px 14px",
-              borderRadius: "10px",
-              border: "1px solid rgba(245, 158, 11, 0.2)",
-              textAlign: "center",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "6px",
-            }}
-          >
-            <Lock size={13} />
-            {localError || "관리자 모드는 태블릿 또는 PC 환경에서만 이용할 수 있습니다. 열람용 모드를 이용해 주세요."}
-          </div>
         )}
 
         {/* Sync Area at the bottom */}

@@ -264,6 +264,21 @@ export default function App() {
     setTimeout(() => setToast(null), 2800);
   };
 
+  // 3-1. 관리자 모드는 PC/태블릿에서만 허용 (모바일 화면으로 전환/축소되면 즉시 열람용 모드로 강등)
+  useEffect(() => {
+    if (isMobile && isAdmin) {
+      setIsAdmin(false);
+      localStorage.setItem("wms_is_admin", "false");
+      setCurrentUser(null);
+      localStorage.removeItem("wms_current_user");
+      if (currentView === "monitor" || currentView === "defect" || currentView === "rent") {
+        setCurrentView("monitor");
+      }
+      showToast("관리자 모드는 PC/태블릿 환경에서만 이용할 수 있어 열람용 모드로 전환되었습니다.", "warn");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMobile]);
+
   // 4. 초기 레이아웃 복원
   useEffect(() => {
     // URL에서 script_url 파라미터를 읽어 연동 복원했는지 감지
@@ -352,18 +367,6 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("wms_is_admin", String(isAdmin));
   }, [isAdmin]);
-
-  // 관리자 모드는 오직 태블릿/PC 환경에서만 허용 (이전 세션에서 캐시된 관리자 상태로
-  // 모바일(폰)에서 접속했을 경우를 대비한 안전장치)
-  useEffect(() => {
-    if (isMobile && isAdmin) {
-      setIsAdmin(false);
-      localStorage.setItem("wms_is_admin", "false");
-      setCurrentUser(null);
-      localStorage.removeItem("wms_current_user");
-      showToast("관리자 모드는 태블릿 또는 PC 환경에서만 이용할 수 있습니다. 열람용 모드로 전환합니다.", "warn");
-    }
-  }, [isMobile, isAdmin]);
 
   /* ---------------- Apps Script API 연동 로직 ---------------- */
   async function callScript(action: string, payload: any) {
@@ -1272,7 +1275,6 @@ export default function App() {
           showToast("스프레드시트 연동이 해제되었습니다. 가상 데모 모드로 동작합니다.", "info");
         }}
         onOpenSetup={() => setShowSetup(true)}
-        isMobile={isMobile}
       />
     );
   }
@@ -1283,7 +1285,7 @@ export default function App() {
         users={users}
         onLoginSuccess={(user) => {
           if (isMobile) {
-            showToast("관리자 모드는 태블릿 또는 PC 환경에서만 이용할 수 있습니다.", "warn");
+            showToast("관리자 모드는 PC 또는 태블릿 환경에서만 접속할 수 있습니다.", "error");
             return;
           }
           setCurrentUser(user);
