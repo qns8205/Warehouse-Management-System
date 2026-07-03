@@ -9,6 +9,7 @@ import {
   Moon,
   Minus,
   Plus,
+  PlusCircle,
   MapPin,
   ChevronRight,
   Check,
@@ -210,6 +211,34 @@ export default function MobileViewPage({
 
   const backToDetail = () => setSheetMode("detail");
 
+  // ---------- 검색해도 리스트에 없는 품목을 "검색한 내용 그대로" 새 품목으로 등록 ----------
+  // 대여 탭: 검색어를 품목명으로 그대로 사용해 새 품목 대여 신청 폼으로 바로 이동
+  // 반납 탭: 미반납 목록에 없는 품목도 검색어 그대로 반납 접수 폼으로 바로 이동
+  const startCustomEntryFromSearch = () => {
+    const trimmed = searchQuery.trim();
+    if (!trimmed) return;
+    const customItem: InventoryItem = {
+      rowIndex: -1,
+      location: "",
+      photo: "",
+      name: trimmed,
+      link: "N/A",
+      stock: "N/A",
+      updatedAt: "",
+      manager: "",
+      note: "",
+      spec: "",
+    };
+    setSelectedItem(customItem);
+    setOutstandingContext(null);
+    setFormUser("");
+    setFormQty(1);
+    setFormNote("");
+    setSheetMode("form");
+  };
+
+  const isCustomEntry = selectedItem?.rowIndex === -1;
+
   const maxQty =
     mode === "대여" && selectedItem && typeof selectedItem.stock === "number"
       ? selectedItem.stock
@@ -219,6 +248,10 @@ export default function MobileViewPage({
 
   const handleSubmit = async () => {
     if (!selectedItem) return;
+    if (isCustomEntry && !selectedItem.name.trim()) {
+      notify("품목명을 입력해 주세요.", "warn");
+      return;
+    }
     if (!formUser.trim()) {
       notify("이름을 입력해 주세요.", "warn");
       return;
@@ -239,8 +272,8 @@ export default function MobileViewPage({
     try {
       const log: RentLog = {
         timestamp: formatTimestampLocal(),
-        location: selectedItem.location,
-        name: selectedItem.name,
+        location: selectedItem.location.trim(),
+        name: selectedItem.name.trim(),
         type: mode,
         qty: formQty,
         user: formUser.trim(),
@@ -509,6 +542,28 @@ export default function MobileViewPage({
             <div style={{ marginTop: "40px", textAlign: "center", color: TEXT_DIM, fontSize: "13px" }}>
               <Package size={36} style={{ margin: "0 auto 10px", opacity: 0.4 }} />
               검색 결과가 없습니다.
+              {searchQuery.trim() && (
+                <div style={{ marginTop: "16px" }}>
+                  <button
+                    className="mvp-btn"
+                    onClick={startCustomEntryFromSearch}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      background: ACCENT,
+                      color: "#ffffff",
+                      borderRadius: "999px",
+                      padding: "11px 18px",
+                      fontSize: "13px",
+                      fontWeight: 800,
+                      boxShadow: "0 6px 16px rgba(79,70,229,0.3)",
+                    }}
+                  >
+                    <PlusCircle size={15} />"{searchQuery.trim()}" 새 품목으로 등록하기
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             filteredInventory.map((item, idx) => {
@@ -627,6 +682,28 @@ export default function MobileViewPage({
           <div style={{ marginTop: "40px", textAlign: "center", color: TEXT_DIM, fontSize: "13px" }}>
             <Check size={36} style={{ margin: "0 auto 10px", opacity: 0.4 }} />
             {searchQuery ? "검색 결과가 없습니다." : "현재 반납할 물품이 없습니다."}
+            {searchQuery.trim() && (
+              <div style={{ marginTop: "16px" }}>
+                <button
+                  className="mvp-btn"
+                  onClick={startCustomEntryFromSearch}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    background: GREEN,
+                    color: "#ffffff",
+                    borderRadius: "999px",
+                    padding: "11px 18px",
+                    fontSize: "13px",
+                    fontWeight: 800,
+                    boxShadow: "0 6px 16px rgba(16,185,129,0.3)",
+                  }}
+                >
+                  <PlusCircle size={15} />"{searchQuery.trim()}" 직접 반납 접수하기
+                </button>
+              </div>
+            )}
           </div>
         ) : (
           filteredOutstanding.map((o) => {
@@ -1025,6 +1102,52 @@ export default function MobileViewPage({
                   </div>
 
                   <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                    {isCustomEntry && (
+                      <div
+                        style={{
+                          background: mode === "대여" ? "rgba(79,70,229,0.08)" : "rgba(16,185,129,0.08)",
+                          border: `1px solid ${mode === "대여" ? "rgba(79,70,229,0.25)" : "rgba(16,185,129,0.25)"}`,
+                          borderRadius: "12px",
+                          padding: "12px 14px",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "10px",
+                        }}
+                      >
+                        <div style={{ fontSize: "11.5px", fontWeight: 800, color: MODE_COLOR_LIGHT, display: "flex", alignItems: "center", gap: "5px" }}>
+                          <PlusCircle size={13} />
+                          리스트에 없는 새 품목 · 검색하신 내용으로 등록됩니다
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                          <label style={{ fontSize: "11px", fontWeight: 700, color: TEXT_DIM }}>
+                            품목명 <span style={{ color: DANGER }}>*</span>
+                          </label>
+                          <input
+                            className="mvp-input"
+                            type="text"
+                            placeholder="품목명 입력"
+                            value={selectedItem.name}
+                            onChange={(e) =>
+                              setSelectedItem((prev) => (prev ? { ...prev, name: e.target.value } : prev))
+                            }
+                            style={inputBaseStyle}
+                          />
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                          <label style={{ fontSize: "11px", fontWeight: 700, color: TEXT_DIM }}>위치 (선택)</label>
+                          <input
+                            className="mvp-input"
+                            type="text"
+                            placeholder="예: A-1 랙"
+                            value={selectedItem.location}
+                            onChange={(e) =>
+                              setSelectedItem((prev) => (prev ? { ...prev, location: e.target.value } : prev))
+                            }
+                            style={inputBaseStyle}
+                          />
+                        </div>
+                      </div>
+                    )}
                     <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                       <label style={{ fontSize: "11.5px", fontWeight: 700, color: TEXT_DIM }}>
                         {mode === "대여" ? "대여자 이름" : "반납자 이름"} <span style={{ color: DANGER }}>*</span>
