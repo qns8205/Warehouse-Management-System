@@ -13,6 +13,7 @@ import {
   ChevronRight,
   Check,
   ImageOff,
+  ClipboardPlus,
 } from "lucide-react";
 import { getGoogleDriveImageUrl, isFuzzyMatch, formatTimestampLocal } from "../utils/drive";
 
@@ -25,7 +26,7 @@ interface MobileViewPageProps {
   connected: boolean;
 }
 
-type SheetMode = "detail" | "form" | null;
+type SheetMode = "detail" | "form" | "register" | null;
 
 /**
  * 모바일 전용 "열람용 모드" 화면.
@@ -43,6 +44,7 @@ export default function MobileViewPage({
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
   const [sheetMode, setSheetMode] = useState<SheetMode>(null);
+  const [formOrigin, setFormOrigin] = useState<"card" | "register">("card");
   const [actionType, setActionType] = useState<"대여" | "반납">("대여");
   const [formUser, setFormUser] = useState("");
   const [formQty, setFormQty] = useState(1);
@@ -50,6 +52,12 @@ export default function MobileViewPage({
   const [submitting, setSubmitting] = useState(false);
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [localToast, setLocalToast] = useState<{ msg: string; type: "ok" | "error" | "warn" } | null>(null);
+
+  // 신규 대여/반납 등록(상단 CTA) 전용 상태
+  const [registerQuery, setRegisterQuery] = useState("");
+  const [isCustomMode, setIsCustomMode] = useState(false);
+  const [customName, setCustomName] = useState("");
+  const [customLocation, setCustomLocation] = useState("기타");
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -79,7 +87,7 @@ export default function MobileViewPage({
   const TEXT_DIM = isLightMode ? "#64748b" : "#94a3b8";
   const INPUT_BG = isLightMode ? "#f8fafc" : "#0f172a";
 
-  // ---------- 검색 필터 ----------
+  // ---------- 검색 필터 (아이템 리스트) ----------
   const filteredItems = useMemo(() => {
     if (!searchQuery.trim()) return inventory;
     return inventory.filter(
@@ -89,6 +97,17 @@ export default function MobileViewPage({
         (item.spec && isFuzzyMatch(item.spec, searchQuery))
     );
   }, [inventory, searchQuery]);
+
+  // ---------- 검색 필터 (신규 등록 시트 내부 검색) ----------
+  const registerFilteredItems = useMemo(() => {
+    if (!registerQuery.trim()) return inventory;
+    return inventory.filter(
+      (item) =>
+        isFuzzyMatch(item.name || "", registerQuery) ||
+        isFuzzyMatch(item.location || "", registerQuery) ||
+        (item.spec && isFuzzyMatch(item.spec, registerQuery))
+    );
+  }, [inventory, registerQuery]);
 
   const isRentDisabled = (item: InventoryItem) =>
     item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false);
@@ -100,7 +119,13 @@ export default function MobileViewPage({
 
   const closeSheet = () => {
     setSheetMode(null);
-    setTimeout(() => setSelectedItem(null), 200);
+    setTimeout(() => {
+      setSelectedItem(null);
+      setIsCustomMode(false);
+      setCustomName("");
+      setCustomLocation("기타");
+      setRegisterQuery("");
+    }, 200);
   };
 
   const openForm = (type: "대여" | "반납") => {
@@ -109,10 +134,59 @@ export default function MobileViewPage({
     setFormUser("");
     setFormQty(1);
     setFormNote("");
+    setFormOrigin("card");
     setSheetMode("form");
   };
 
-  const backToDetail = () => setSheetMode("detail");
+  // 상단 CTA: 신규 대여/반납 등록 시작
+  const openRegister = () => {
+    setActionType("대여");
+    setRegisterQuery("");
+    setIsCustomMode(false);
+    setCustomName("");
+    setCustomLocation("기타");
+    setSelectedItem(null);
+    setSheetMode("register");
+  };
+
+  // 신규 등록 시트에서 기존 목록의 품목을 선택
+  const selectRegisterItem = (item: InventoryItem) => {
+    setSelectedItem(item);
+    setFormUser("");
+    setFormQty(1);
+    setFormNote("");
+    setFormOrigin("register");
+    setSheetMode("form");
+  };
+
+  // 신규 등록 시트에서 리스트에 없는 새 품목을 직접 입력
+  const confirmCustomItem = () => {
+    if (!customName.trim()) {
+      notify("품목 이름을 입력해 주세요.", "warn");
+      return;
+    }
+    const customItem: InventoryItem = {
+      rowIndex: -1,
+      location: customLocation.trim() || "기타",
+      photo: "",
+      name: customName.trim(),
+      link: "N/A",
+      stock: "N/A",
+      updatedAt: "",
+      manager: "",
+      note: "리스트 외 임시 품목",
+      spec: "",
+    };
+    setSelectedItem(customItem);
+    setFormUser("");
+    setFormQty(1);
+    setFormNote("");
+    setFormOrigin("register");
+    setSheetMode("form");
+  };
+
+  // 폼 단계에서 뒤로가기: 진입 경로에 따라 상세화면 또는 등록화면으로 복귀
+  const handleFormBack = () => setSheetMode(formOrigin === "register" ? "register" : "detail");
 
   const maxQty =
     actionType === "대여" && selectedItem && typeof selectedItem.stock === "number"
@@ -274,6 +348,30 @@ export default function MobileViewPage({
           borderBottom: `1px solid ${BORDER}`,
         }}
       >
+        {/* 신규 대여/반납 등록 CTA (맨 위) */}
+        <button
+          className="mvp-btn"
+          onClick={openRegister}
+          style={{
+            width: "100%",
+            background: "linear-gradient(135deg, #4f46e5 0%, #6366f1 100%)",
+            color: "#ffffff",
+            borderRadius: "14px",
+            padding: "13px 16px",
+            fontSize: "14px",
+            fontWeight: 800,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "8px",
+            boxShadow: "0 8px 18px rgba(79,70,229,0.35)",
+            marginBottom: "10px",
+          }}
+        >
+          <ClipboardPlus size={17} />
+          신규 대여/반납 등록
+        </button>
+
         <div style={{ position: "relative" }}>
           <Search
             size={16}
@@ -454,8 +552,8 @@ export default function MobileViewPage({
         )}
       </main>
 
-      {/* ===== 상세/신청 바텀시트 ===== */}
-      {sheetMode && selectedItem && (
+      {/* ===== 상세/등록/신청 바텀시트 ===== */}
+      {sheetMode && (sheetMode === "register" || selectedItem) && (
         <div
           style={{
             position: "fixed",
@@ -649,13 +747,277 @@ export default function MobileViewPage({
                     </button>
                   </div>
                 </>
+              ) : sheetMode === "register" ? (
+                <>
+                  {/* ===== 신규 대여/반납 등록 ===== */}
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "18px" }}>
+                    <h2 style={{ fontSize: "17px", fontWeight: 800, color: TEXT_MAIN, margin: 0 }}>
+                      📋 신규 대여/반납 등록
+                    </h2>
+                    <button
+                      className="mvp-btn"
+                      onClick={closeSheet}
+                      style={{
+                        width: "32px",
+                        height: "32px",
+                        borderRadius: "10px",
+                        background: isLightMode ? "#f1f5f9" : "#1e293b",
+                        color: TEXT_MAIN,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+
+                  {/* 구분 토글 */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "16px" }}>
+                    <label style={{ fontSize: "11.5px", fontWeight: 700, color: TEXT_DIM }}>구분</label>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "1fr 1fr",
+                        gap: "8px",
+                        background: isLightMode ? "#f1f5f9" : "#0f172a",
+                        padding: "4px",
+                        borderRadius: "12px",
+                      }}
+                    >
+                      <button
+                        className="mvp-btn"
+                        onClick={() => setActionType("대여")}
+                        style={{
+                          padding: "11px",
+                          borderRadius: "9px",
+                          fontSize: "13.5px",
+                          fontWeight: 700,
+                          background: actionType === "대여" ? ACCENT : "transparent",
+                          color: actionType === "대여" ? "#ffffff" : TEXT_DIM,
+                        }}
+                      >
+                        📥 대여
+                      </button>
+                      <button
+                        className="mvp-btn"
+                        onClick={() => setActionType("반납")}
+                        style={{
+                          padding: "11px",
+                          borderRadius: "9px",
+                          fontSize: "13.5px",
+                          fontWeight: 700,
+                          background: actionType === "반납" ? GREEN : "transparent",
+                          color: actionType === "반납" ? "#ffffff" : TEXT_DIM,
+                        }}
+                      >
+                        🔄 반납
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 기존 목록 / 직접 입력 전환 */}
+                  <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "8px" }}>
+                    <button
+                      className="mvp-btn"
+                      onClick={() => setIsCustomMode((v) => !v)}
+                      style={{
+                        background: "none",
+                        color: ACCENT_LIGHT,
+                        fontSize: "11.5px",
+                        fontWeight: 700,
+                        textDecoration: "underline",
+                        padding: 0,
+                      }}
+                    >
+                      {isCustomMode ? "🔍 기존 목록에서 선택" : "✏️ 리스트에 없는 새 물품 등록"}
+                    </button>
+                  </div>
+
+                  {isCustomMode ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                        <label style={{ fontSize: "11.5px", fontWeight: 700, color: TEXT_DIM }}>
+                          품목명 <span style={{ color: DANGER }}>*</span>
+                        </label>
+                        <input
+                          className="mvp-input"
+                          type="text"
+                          placeholder="예: 특수 고정용 고무 밴드"
+                          value={customName}
+                          onChange={(e) => setCustomName(e.target.value)}
+                          style={{
+                            width: "100%",
+                            background: INPUT_BG,
+                            border: `1px solid ${BORDER}`,
+                            borderRadius: "12px",
+                            padding: "13px 14px",
+                            color: TEXT_MAIN,
+                            fontSize: "15px",
+                            outline: "none",
+                          }}
+                        />
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                        <label style={{ fontSize: "11.5px", fontWeight: 700, color: TEXT_DIM }}>보관 위치</label>
+                        <input
+                          className="mvp-input"
+                          type="text"
+                          placeholder="예: 기타"
+                          value={customLocation}
+                          onChange={(e) => setCustomLocation(e.target.value)}
+                          style={{
+                            width: "100%",
+                            background: INPUT_BG,
+                            border: `1px solid ${BORDER}`,
+                            borderRadius: "12px",
+                            padding: "13px 14px",
+                            color: TEXT_MAIN,
+                            fontSize: "14px",
+                            outline: "none",
+                          }}
+                        />
+                      </div>
+                      <button
+                        className="mvp-btn"
+                        onClick={confirmCustomItem}
+                        style={{
+                          width: "100%",
+                          background: actionType === "대여" ? ACCENT : GREEN,
+                          color: "#ffffff",
+                          borderRadius: "14px",
+                          padding: "14px",
+                          fontSize: "14.5px",
+                          fontWeight: 800,
+                          marginTop: "4px",
+                          boxShadow: `0 8px 20px ${actionType === "대여" ? "rgba(79,70,229,0.3)" : "rgba(16,185,129,0.3)"}`,
+                        }}
+                      >
+                        다음: 수량 · 이름 입력
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ position: "relative", marginBottom: "10px" }}>
+                        <Search
+                          size={16}
+                          style={{ position: "absolute", left: "14px", top: "50%", transform: "translateY(-50%)", color: TEXT_DIM }}
+                        />
+                        <input
+                          className="mvp-input"
+                          type="text"
+                          inputMode="search"
+                          placeholder="품목명, 위치, 규격으로 검색"
+                          value={registerQuery}
+                          onChange={(e) => setRegisterQuery(e.target.value)}
+                          autoFocus
+                          style={{
+                            width: "100%",
+                            background: INPUT_BG,
+                            border: `1px solid ${BORDER}`,
+                            borderRadius: "12px",
+                            padding: "13px 14px 13px 38px",
+                            color: TEXT_MAIN,
+                            fontSize: "14px",
+                            outline: "none",
+                          }}
+                        />
+                      </div>
+
+                      <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxHeight: "46vh", overflowY: "auto" }}>
+                        {registerFilteredItems.length === 0 ? (
+                          <div style={{ textAlign: "center", color: TEXT_DIM, fontSize: "12.5px", padding: "24px 0" }}>
+                            검색 결과가 없습니다.
+                          </div>
+                        ) : (
+                          registerFilteredItems.map((item, idx) => {
+                            const hasImage = !!item.photo;
+                            const imageUrl = hasImage ? getGoogleDriveImageUrl(item.photo) : "";
+                            const stockLabel = item.stock === null ? "N/A" : `${item.stock}개`;
+                            const stockColor = item.stock === null ? TEXT_DIM : item.stock === 0 ? DANGER : GREEN;
+
+                            return (
+                              <div
+                                key={`reg-${item.rowIndex}-${idx}`}
+                                className="mvp-card"
+                                onClick={() => selectRegisterItem(item)}
+                                style={{
+                                  background: isLightMode ? "#f8fafc" : "#0f172a",
+                                  border: `1px solid ${BORDER}`,
+                                  borderRadius: "14px",
+                                  padding: "9px",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "10px",
+                                  cursor: "pointer",
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    width: "42px",
+                                    height: "42px",
+                                    borderRadius: "10px",
+                                    overflow: "hidden",
+                                    flexShrink: 0,
+                                    background: isLightMode ? "#e2e8f0" : "#1e293b",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                  }}
+                                >
+                                  {hasImage ? (
+                                    <img
+                                      src={imageUrl}
+                                      alt={item.name}
+                                      referrerPolicy="no-referrer"
+                                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                                      onError={(e) => {
+                                        (e.currentTarget as HTMLImageElement).style.display = "none";
+                                      }}
+                                    />
+                                  ) : (
+                                    <Package size={16} color={TEXT_DIM} />
+                                  )}
+                                </div>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div
+                                    style={{
+                                      fontSize: "13px",
+                                      fontWeight: 800,
+                                      color: TEXT_MAIN,
+                                      whiteSpace: "nowrap",
+                                      overflow: "hidden",
+                                      textOverflow: "ellipsis",
+                                    }}
+                                  >
+                                    {item.name || "(이름 없음)"}
+                                  </div>
+                                  <div className="mono" style={{ fontSize: "10.5px", color: TEXT_DIM, marginTop: "2px" }}>
+                                    {item.location || "위치 미지정"}
+                                  </div>
+                                </div>
+                                <span
+                                  className="mono"
+                                  style={{ fontSize: "11px", fontWeight: 800, color: stockColor, flexShrink: 0 }}
+                                >
+                                  {stockLabel}
+                                </span>
+                                <ChevronRight size={14} color={TEXT_DIM} style={{ flexShrink: 0 }} />
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </>
+                  )}
+                </>
               ) : (
                 <>
                   {/* ===== 대여/반납 신청 폼 ===== */}
                   <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "16px" }}>
                     <button
                       className="mvp-btn"
-                      onClick={backToDetail}
+                      onClick={handleFormBack}
                       style={{
                         width: "32px",
                         height: "32px",
