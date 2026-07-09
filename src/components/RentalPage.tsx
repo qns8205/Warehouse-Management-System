@@ -26,7 +26,7 @@ export default function RentalPage({
 }: RentalPageProps) {
   // 상태 선언
   const [rentUser, setRentUser] = useState("");
-  const [actionType, setActionType] = useState<"대여" | "반납">("대여");
+  const [actionType, setActionType] = useState<"대여" | "반납" | "소모">("대여");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
   const [rentQty, setRentQty] = useState(1);
@@ -155,17 +155,17 @@ export default function RentalPage({
       return;
     }
 
-    // 대여일 때 재고 검증 (재고 수량이 숫자일 때만 수행)
-    if (actionType === "대여" && typeof activeItem.stock === "number") {
+    // 대여 또는 소모일 때 재고 검증 (재고 수량이 숫자일 때만 수행)
+    if ((actionType === "대여" || actionType === "소모") && typeof activeItem.stock === "number") {
       const currentStock = activeItem.stock ?? 0;
       if (currentStock <= 0) {
-        showToast("선택한 물품의 현재고가 부족하여 대여할 수 없습니다.", "error");
+        showToast("선택한 물품의 현재고가 부족하여 대여/소모할 수 없습니다.", "error");
         return;
       }
       
-      // 장바구니에 담긴 동일 품목의 대여 수량 합산
+      // 장바구니에 담긴 동일 품목의 대여/소모 수량 합산
       const alreadyInCartQty = cart
-        .filter((c) => c.item.name === activeItem!.name && c.type === "대여")
+        .filter((c) => c.item.name === activeItem!.name && (c.type === "대여" || c.type === "소모"))
         .reduce((acc, c) => acc + c.qty, 0);
 
       if ((rentQty + alreadyInCartQty) > currentStock) {
@@ -377,12 +377,12 @@ export default function RentalPage({
 
           <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
             
-            {/* 대여 / 반납 토글 */}
+            {/* 대여 / 반납 / 소모 토글 */}
             <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
               <label style={{ fontSize: "11px", fontWeight: 700, color: isLightMode ? "#475569" : "#94a3b8" }}>
                 구분
               </label>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", background: isLightMode ? "#f1f5f9" : "#0f172a", padding: "4px", borderRadius: "10px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px", background: isLightMode ? "#f1f5f9" : "#0f172a", padding: "4px", borderRadius: "10px" }}>
                 <button
                   type="button"
                   onClick={() => setActionType("대여")}
@@ -416,6 +416,23 @@ export default function RentalPage({
                   }}
                 >
                   🔄 자재 반납
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActionType("소모")}
+                  style={{
+                    padding: "8px",
+                    borderRadius: "8px",
+                    fontSize: "13px",
+                    fontWeight: 700,
+                    border: "none",
+                    cursor: "pointer",
+                    background: actionType === "소모" ? "#f59e0b" : "transparent",
+                    color: actionType === "소모" ? "#ffffff" : (isLightMode ? "#475569" : "#94a3b8"),
+                    transition: "all 0.2s",
+                  }}
+                >
+                  🔥 자재 소모
                 </button>
               </div>
             </div>
@@ -802,7 +819,7 @@ export default function RentalPage({
                 <button
                   type="button"
                   onClick={() => {
-                    if (actionType === "대여" && selectedItem && rentQty >= (selectedItem.stock ?? 0)) {
+                    if ((actionType === "대여" || actionType === "소모") && selectedItem && rentQty >= (selectedItem.stock ?? 0)) {
                       showToast("재고를 초과할 수 없습니다.", "warn");
                       return;
                     }
@@ -823,9 +840,9 @@ export default function RentalPage({
                   +
                 </button>
               </div>
-              {actionType === "대여" && selectedItem && (selectedItem.stock ?? 0) < rentQty && (
+              {(actionType === "대여" || actionType === "소모") && selectedItem && (selectedItem.stock ?? 0) < rentQty && (
                 <span style={{ fontSize: "11px", color: "#ef4444", marginTop: "2px" }}>
-                  ⚠️ 현재고({selectedItem.stock ?? 0}개)를 초과했습니다. 대여 신청을 완료할 수 없습니다.
+                  ⚠️ 현재고({selectedItem.stock ?? 0}개)를 초과했습니다. 대여/소모 신청을 완료할 수 없습니다.
                 </span>
               )}
             </div>
@@ -838,7 +855,7 @@ export default function RentalPage({
               disabled={submitting}
               style={{
                 width: "100%",
-                background: actionType === "대여" ? "#4f46e5" : "#10b981",
+                background: actionType === "대여" ? "#4f46e5" : actionType === "소모" ? "#f59e0b" : "#10b981",
                 color: "#ffffff",
                 border: "none",
                 borderRadius: "12px",
@@ -847,7 +864,7 @@ export default function RentalPage({
                 fontWeight: 700,
                 cursor: "pointer",
                 transition: "all 0.2s",
-                boxShadow: `0 4px 14px ${actionType === "대여" ? "rgba(79, 70, 229, 0.3)" : "rgba(16, 185, 129, 0.3)"}`,
+                boxShadow: `0 4px 14px ${actionType === "대여" ? "rgba(79, 70, 229, 0.3)" : actionType === "소모" ? "rgba(245, 158, 11, 0.3)" : "rgba(16, 185, 129, 0.3)"}`,
                 opacity: submitting ? 0.5 : 1,
                 marginTop: "10px",
                 display: "flex",
@@ -937,7 +954,7 @@ export default function RentalPage({
                         <span
                           style={{
                             fontWeight: 800,
-                            color: c.type === "대여" ? "#4f46e5" : "#10b981",
+                            color: c.type === "대여" ? "#4f46e5" : c.type === "소모" ? "#f59e0b" : "#10b981",
                           }}
                         >
                           [{c.type}]

@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { InventoryItem, DefectLog } from "../types";
-import { AlertTriangle, Calendar, User, MapPin, Clipboard, Plus, Search, ArrowLeft, FileText, Check } from "lucide-react";
+import { AlertTriangle, Calendar, User, MapPin, Clipboard, Plus, Search, ArrowLeft, FileText, Check, Camera, Upload, X, ImageIcon } from "lucide-react";
 
 import { isFuzzyMatch } from "../utils/drive";
 
@@ -57,6 +57,7 @@ export default function DefectLogsPage({
   const [defectType, setDefectType] = useState("파손");
   const [noteInput, setNoteInput] = useState("");
   const [actionTakenInput, setActionTakenInput] = useState("");
+  const [photoInput, setPhotoInput] = useState<string>("");
   
   // Custom manual input mode toggles
   const [manualItemName, setManualItemName] = useState(false);
@@ -69,6 +70,83 @@ export default function DefectLogsPage({
   // Submitting state
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [zoomedPhoto, setZoomedPhoto] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+
+  // Resize and compress uploaded image to fit Google Sheets payload cleanly
+  const resizeImage = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (readerEvent) => {
+        const image = new Image();
+        image.onload = () => {
+          const canvas = document.createElement("canvas");
+          const max_size = 280; // Compact but clear representation
+          let width = image.width;
+          let height = image.height;
+          if (width > height) {
+            if (width > max_size) {
+              height *= max_size / width;
+              width = max_size;
+            }
+          } else {
+            if (height > max_size) {
+              width *= max_size / height;
+              height = max_size;
+            }
+          }
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(image, 0, 0, width, height);
+          }
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.65); // High compression to save space
+          resolve(dataUrl);
+        };
+        image.onerror = (err) => reject(err);
+        image.src = readerEvent.target?.result as string;
+      };
+      reader.onerror = (err) => reject(err);
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handlePhotoFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const resized = await resizeImage(file);
+      setPhotoInput(resized);
+    } catch (err) {
+      console.error("Failed to process image:", err);
+      setFormError("이미지 처리 중 오류가 발생했습니다.");
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = () => {
+    setIsDragging(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file && file.type.startsWith("image/")) {
+      try {
+        const resized = await resizeImage(file);
+        setPhotoInput(resized);
+      } catch (err) {
+        console.error("Failed to process image:", err);
+        setFormError("이미지 처리 중 오류가 발생했습니다.");
+      }
+    }
+  };
 
   // Extract unique items from inventory for selection
   const uniqueItems = useMemo(() => {
@@ -141,12 +219,14 @@ export default function DefectLogsPage({
         manager: "",
         note: noteInput.trim(),
         actionTaken: actionTakenInput.trim(),
+        photo: photoInput || undefined,
       });
 
       // Reset form fields
       setNoteInput("");
       setActionTakenInput("");
       setQtyInput(1);
+      setPhotoInput("");
       setFormError(null);
     } catch (err: any) {
       setFormError(err.message || "불량 로그 등록에 실패했습니다.");
@@ -239,8 +319,6 @@ export default function DefectLogsPage({
             </p>
           </div>
         </div>
-
-
       </div>
 
       {/* 2. Stat Widgets */}
@@ -506,6 +584,74 @@ export default function DefectLogsPage({
               />
             </div>
 
+            {/* 사진 등록 */}
+            <div>
+              <label style={{ fontSize: "12.5px", display: "block", marginBottom: 6, fontWeight: 600 }}>📸 불량 현장 사진 등록</label>
+              {photoInput ? (
+                <div style={{ position: "relative", width: "100%", height: "140px", borderRadius: "8px", overflow: "hidden", border: `1px solid ${PANEL_BORDER}` }}>
+                  <img src={photoInput} alt="Uploaded preview" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  <button
+                    type="button"
+                    onClick={() => setPhotoInput("")}
+                    style={{
+                      position: "absolute",
+                      right: "8px",
+                      top: "8px",
+                      background: "rgba(15, 23, 42, 0.75)",
+                      border: "none",
+                      color: "#ffffff",
+                      borderRadius: "50%",
+                      width: "28px",
+                      height: "28px",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      cursor: "pointer",
+                      transition: "background 0.15s"
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = DANGER)}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "rgba(15, 23, 42, 0.75)")}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ) : (
+                <div
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                  onClick={() => document.getElementById("defect-photo-upload")?.click()}
+                  style={{
+                    width: "100%",
+                    height: "100px",
+                    border: `2px dashed ${isDragging ? ACCENT : PANEL_BORDER}`,
+                    borderRadius: "8px",
+                    background: isDragging ? "rgba(99, 102, 241, 0.05)" : "var(--input-bg, #0f172a)",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "6px",
+                    cursor: "pointer",
+                    transition: "all 0.15s",
+                  }}
+                >
+                  <Upload size={20} style={{ color: isDragging ? ACCENT : TEXT_DIM }} />
+                  <span style={{ fontSize: "12px", color: TEXT_MAIN, fontWeight: 500 }}>
+                    {isDragging ? "여기에 이미지를 놓으세요" : "클릭하거나 이미지를 끌어다 놓으세요"}
+                  </span>
+                  <span style={{ fontSize: "11px", color: TEXT_DIM }}>PNG, JPG (자동 압축 및 연동)</span>
+                  <input
+                    id="defect-photo-upload"
+                    type="file"
+                    accept="image/*"
+                    onChange={handlePhotoFileChange}
+                    style={{ display: "none" }}
+                  />
+                </div>
+              )}
+            </div>
+
             {formError && (
               <div
                 style={{
@@ -647,12 +793,13 @@ export default function DefectLogsPage({
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12.5px", minWidth: "900px" }}>
                 <thead>
                   <tr style={{ background: isLightMode ? "#f8fafc" : "#1e293b", borderBottom: `2px solid ${PANEL_BORDER}`, position: "sticky", top: 0, zIndex: 10 }}>
-                    <th style={{ padding: "10px 14px", borderRight: `1px solid ${PANEL_BORDER}`, color: TEXT_MAIN, textAlign: "left", width: "22%" }}>제품명</th>
+                    <th style={{ padding: "10px 14px", borderRight: `1px solid ${PANEL_BORDER}`, color: TEXT_MAIN, textAlign: "left", width: "18%" }}>제품명</th>
+                    <th style={{ padding: "10px 14px", borderRight: `1px solid ${PANEL_BORDER}`, color: TEXT_MAIN, textAlign: "center", width: "8%" }}>사진</th>
                     <th style={{ padding: "10px 14px", borderRight: `1px solid ${PANEL_BORDER}`, color: TEXT_MAIN, textAlign: "center", width: "8%" }}>개수</th>
                     <th style={{ padding: "10px 14px", borderRight: `1px solid ${PANEL_BORDER}`, color: TEXT_MAIN, textAlign: "left", width: "15%" }}>기록 시간</th>
-                    <th style={{ padding: "10px 14px", borderRight: `1px solid ${PANEL_BORDER}`, color: TEXT_MAIN, textAlign: "center", width: "14%" }}>불량 유형</th>
+                    <th style={{ padding: "10px 14px", borderRight: `1px solid ${PANEL_BORDER}`, color: TEXT_MAIN, textAlign: "center", width: "12%" }}>불량 유형</th>
                     <th style={{ padding: "10px 14px", borderRight: `1px solid ${PANEL_BORDER}`, color: TEXT_MAIN, textAlign: "left", width: "21%" }}>세부 사항</th>
-                    <th style={{ padding: "10px 14px", color: TEXT_MAIN, textAlign: "left", width: "20%" }}>대처 방안</th>
+                    <th style={{ padding: "10px 14px", color: TEXT_MAIN, textAlign: "left", width: "18%" }}>대처 방안</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -668,6 +815,33 @@ export default function DefectLogsPage({
                         {/* 제품명 */}
                         <td style={{ padding: "10px 14px", borderRight: `1px solid ${PANEL_BORDER}`, color: TEXT_MAIN, fontWeight: 700 }}>
                           {log.name}
+                        </td>
+
+                        {/* 사진 */}
+                        <td style={{ padding: "10px 14px", borderRight: `1px solid ${PANEL_BORDER}`, textAlign: "center" }}>
+                          {log.photo ? (
+                            <div style={{ display: "flex", justifyContent: "center", alignItems: "center" }}>
+                              <img
+                                src={log.photo}
+                                alt="불량 이미지"
+                                referrerPolicy="no-referrer"
+                                style={{
+                                  width: "40px",
+                                  height: "40px",
+                                  objectFit: "cover",
+                                  borderRadius: "6px",
+                                  border: `1px solid ${PANEL_BORDER}`,
+                                  cursor: "zoom-in",
+                                  transition: "transform 0.15s",
+                                }}
+                                onClick={() => setZoomedPhoto(log.photo!)}
+                                onMouseEnter={(e) => (e.currentTarget.style.transform = "scale(1.15)")}
+                                onMouseLeave={(e) => (e.currentTarget.style.transform = "scale(1)")}
+                              />
+                            </div>
+                          ) : (
+                            <span style={{ color: TEXT_DIM, fontSize: "11px" }}>-</span>
+                          )}
                         </td>
                         
                         {/* 개수 */}
@@ -762,6 +936,65 @@ export default function DefectLogsPage({
           </div>
         </div>
       </div>
+
+      {/* Zoomed Photo Modal overlay */}
+      {zoomedPhoto && (
+        <div
+          onClick={() => setZoomedPhoto(null)}
+          style={{
+            position: "fixed",
+            left: 0,
+            top: 0,
+            width: "100vw",
+            height: "100vh",
+            background: "rgba(15, 23, 42, 0.92)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 9999,
+            cursor: "zoom-out",
+            padding: "24px",
+            backdropFilter: "blur(4px)",
+          }}
+        >
+          <div style={{ position: "relative", maxWidth: "90%", maxHeight: "90%" }} onClick={(e) => e.stopPropagation()}>
+            <img
+              src={zoomedPhoto}
+              alt="확대 사진"
+              referrerPolicy="no-referrer"
+              style={{
+                maxWidth: "100%",
+                maxHeight: "85vh",
+                borderRadius: "12px",
+                boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
+                border: "2px solid rgba(255, 255, 255, 0.15)"
+              }}
+            />
+            <button
+              onClick={() => setZoomedPhoto(null)}
+              style={{
+                position: "absolute",
+                top: "-45px",
+                right: "0px",
+                background: "rgba(255,255,255,0.15)",
+                color: "#ffffff",
+                border: "none",
+                borderRadius: "50%",
+                width: "36px",
+                height: "36px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+                fontWeight: "bold",
+                fontSize: "16px"
+              }}
+            >
+              <X size={20} />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

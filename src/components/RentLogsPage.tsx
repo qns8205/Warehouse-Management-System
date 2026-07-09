@@ -17,8 +17,6 @@ import {
   AlertCircle 
 } from "lucide-react";
 
-import { isFuzzyMatch } from "../utils/drive";
-
 interface RentLogsPageProps {
   rentLogs: RentLog[];
   inventory: InventoryItem[];
@@ -36,6 +34,7 @@ const TEXT_DIM = "var(--text-dim, #94a3b8)";
 const ACCENT = "#6366f1";
 const DANGER = "#f43f5e";
 const OK = "#10b981";
+const WARNING = "#f59e0b";
 
 function formatTimestampToMinutes(tsStr: string): string {
   if (!tsStr) return "실시간 동기화";
@@ -68,7 +67,7 @@ export default function RentLogsPage({
   const [filterQuery, setFilterQuery] = useState("");
   const [filterType, setFilterType] = useState("전체");
 
-  // Collapsible Registration Form State (Guesst Mode defaults to true)
+  // Collapsible Registration Form State (Guest Mode defaults to true)
   const [showAddForm, setShowAddForm] = useState(isGuestMode);
   
   // Registration Form Fields
@@ -76,7 +75,7 @@ export default function RentLogsPage({
   const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [rentQty, setRentQty] = useState(1);
-  const [actionType, setActionType] = useState<"대여" | "반납">("대여");
+  const [actionType, setActionType] = useState<"대여" | "반납" | "소모">("대여");
   const [noteInput, setNoteInput] = useState("");
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -84,6 +83,7 @@ export default function RentLogsPage({
   // Instant Return Trackers (prevents double clicking and gives visual checkmark)
   const [returnedTimestamps, setReturnedTimestamps] = useState<string[]>([]);
   const [returningStates, setReturningStates] = useState<{ [key: string]: boolean }>({});
+  const [consumingStates, setConsumingStates] = useState<{ [key: string]: boolean }>({});
 
   // Dynamically compute returned timestamps from the logs history (handles refresh/initial load)
   const computedReturnedTimestamps = useMemo(() => {
@@ -115,7 +115,7 @@ export default function RentLogsPage({
       } else if (log.type === "반납") {
         let matchedByNote = false;
 
-        if (log.note && log.note.includes("[즉시반납]")) {
+        if (log.note && (log.note.includes("[즉시반납]") || log.note.includes("[소모완료]"))) {
           const list = outstanding[key] || [];
           for (const item of list) {
             if (item.remainingQty > 0) {
@@ -173,11 +173,12 @@ export default function RentLogsPage({
 
   // Filter inventory for dropdown autocomplete
   const filteredInventoryItems = useMemo(() => {
-    if (!searchQuery.trim()) return inventory;
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return inventory;
     return inventory.filter(
       (item) =>
-        isFuzzyMatch(item.name || "", searchQuery) ||
-        isFuzzyMatch(item.location || "", searchQuery)
+        item.name.toLowerCase().includes(q) ||
+        item.location.toLowerCase().includes(q)
     );
   }, [inventory, searchQuery]);
 
@@ -297,15 +298,47 @@ export default function RentLogsPage({
     }
   };
 
+  // Instant Consume execution
+  const handleInstantConsume = async (log: RentLog) => {
+    if (consumingStates[log.timestamp] || allReturnedTimestamps.includes(log.timestamp)) return;
+
+    setConsumingStates((prev) => ({ ...prev, [log.timestamp]: true }));
+    showToast?.(`${log.name} 소모 처리 진행 중...`, "info");
+
+    try {
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const customTsStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+
+      const consumeLog: RentLog = {
+        timestamp: customTsStr,
+        location: log.location,
+        name: log.name,
+        type: "반납",
+        qty: log.qty,
+        user: log.user,
+        note: `[소모완료] ${formatTimestampToMinutes(log.timestamp)} 대여 건 소모 처리 (아예 사용함)`,
+      };
+
+      await onAddRentLog(consumeLog);
+      setReturnedTimestamps((prev) => [...prev, log.timestamp]);
+      showToast?.(`${log.name} 소모(아예 사용) 처리가 완료되었습니다!`, "ok");
+    } catch (err: any) {
+      showToast?.("소모 처리 실패: " + err.message, "error");
+    } finally {
+      setConsumingStates((prev) => ({ ...prev, [log.timestamp]: false }));
+    }
+  };
+
   // Filter logs for table rendering
   const filteredLogs = useMemo(() => {
     const filtered = rentLogs.filter((log) => {
       const matchesQuery =
-        !filterQuery.trim() ||
-        isFuzzyMatch(log.name || "", filterQuery) ||
-        isFuzzyMatch(log.user || "", filterQuery) ||
-        (log.location && isFuzzyMatch(log.location, filterQuery)) ||
-        (log.note && isFuzzyMatch(log.note, filterQuery));
+        !filterQuery ||
+        log.name.toLowerCase().includes(filterQuery.toLowerCase()) ||
+        log.user.toLowerCase().includes(filterQuery.toLowerCase()) ||
+        (log.location && log.location.toLowerCase().includes(filterQuery.toLowerCase())) ||
+        (log.note && log.note.toLowerCase().includes(filterQuery.toLowerCase()));
 
       const matchesType = filterType === "전체" || log.type === filterType;
 
@@ -426,10 +459,10 @@ export default function RentLogsPage({
                   alignItems: "end",
                 }}
               >
-                {/* 1. 구분 (대여 / 반납) */}
+                {/* 1. 구분 (대여 / 반납 / 소모) */}
                 <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                   <label style={{ fontSize: "11px", fontWeight: 700, color: TEXT_DIM }}>구분</label>
-                  <div style={{ display: "flex", background: "var(--input-bg, #020617)", borderRadius: "8px", padding: "3px", border: `1px solid ${PANEL_BORDER}` }}>
+                  <div style={{ display: "flex", background: "var(--input-bg, #020617)", borderRadius: "8px", padding: "3px", border: `1px solid ${PANEL_BORDER}`, gap: "2px" }}>
                     <button
                       type="button"
                       onClick={() => setActionType("대여")}
@@ -465,6 +498,24 @@ export default function RentLogsPage({
                       }}
                     >
                       반납
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActionType("소모")}
+                      style={{
+                        flex: 1,
+                        padding: "6px 0",
+                        borderRadius: "6px",
+                        border: "none",
+                        fontSize: "12px",
+                        fontWeight: 700,
+                        cursor: "pointer",
+                        background: actionType === "소모" ? WARNING : "transparent",
+                        color: actionType === "소모" ? "#ffffff" : TEXT_DIM,
+                        transition: "all 0.15s",
+                      }}
+                    >
+                      소모
                     </button>
                   </div>
                 </div>
@@ -767,7 +818,7 @@ export default function RentLogsPage({
 
             {/* Type buttons */}
             <div style={{ display: "flex", gap: 6, background: "var(--panel-bg, #0f172a)", padding: 3, borderRadius: 6, border: `1px solid ${PANEL_BORDER}` }}>
-              {["전체", "대여", "반납"].map((t) => (
+              {["전체", "대여", "반납", "소모"].map((t) => (
                 <button
                   key={t}
                   onClick={() => setFilterType(t)}
@@ -778,8 +829,8 @@ export default function RentLogsPage({
                     fontWeight: 700,
                     border: "none",
                     cursor: "pointer",
-                    background: filterType === t ? (t === "대여" ? "rgba(99,102,241,0.2)" : t === "반납" ? "rgba(16,185,129,0.2)" : "rgba(255,255,255,0.1)") : "transparent",
-                    color: filterType === t ? (t === "대여" ? ACCENT : t === "반납" ? OK : TEXT_MAIN) : TEXT_DIM,
+                    background: filterType === t ? (t === "대여" ? "rgba(99,102,241,0.2)" : t === "반납" ? "rgba(16,185,129,0.2)" : t === "소모" ? "rgba(245,158,11,0.2)" : "rgba(255,255,255,0.1)") : "transparent",
+                    color: filterType === t ? (t === "대여" ? ACCENT : t === "반납" ? OK : t === "소모" ? WARNING : TEXT_MAIN) : TEXT_DIM,
                   }}
                 >
                   {t}
@@ -811,7 +862,7 @@ export default function RentLogsPage({
                     <th style={{ textAlign: "center", padding: "10px 14px", color: TEXT_DIM, fontWeight: 600 }}>수량</th>
                     <th style={{ textAlign: "left", padding: "10px 14px", color: TEXT_DIM, fontWeight: 600 }}>신청자</th>
                     <th style={{ textAlign: "left", padding: "10px 14px", color: TEXT_DIM, fontWeight: 600 }}>사유 / 비고</th>
-                    <th style={{ textAlign: "center", padding: "10px 14px", color: TEXT_DIM, fontWeight: 600, width: "110px" }}>즉시 반납</th>
+                    <th style={{ textAlign: "center", padding: "10px 14px", color: TEXT_DIM, fontWeight: 600, width: "180px" }}>즉시 반납/소모</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -826,6 +877,16 @@ export default function RentLogsPage({
                     filteredLogs.map((log, index) => {
                       const isReturned = allReturnedTimestamps.includes(log.timestamp);
                       const isReturning = returningStates[log.timestamp] || false;
+                      const isConsuming = consumingStates[log.timestamp] || false;
+
+                      // Check if resolved as consumed
+                      let isConsumed = false;
+                      if (isReturned) {
+                        const formatted = formatTimestampToMinutes(log.timestamp);
+                        isConsumed = rentLogs.some(
+                          (l) => l.note && l.note.includes("[소모완료]") && l.note.includes(formatted)
+                        );
+                      }
 
                       return (
                         <tr
@@ -846,11 +907,11 @@ export default function RentLogsPage({
                                 borderRadius: 4,
                                 fontSize: 10,
                                 fontWeight: 800,
-                                background: log.type === "대여" ? "rgba(99, 102, 241, 0.15)" : "rgba(16, 185, 129, 0.15)",
-                                color: log.type === "대여" ? ACCENT : OK,
+                                background: log.type === "대여" ? "rgba(99, 102, 241, 0.15)" : log.type === "소모" ? "rgba(245, 158, 11, 0.15)" : "rgba(16, 185, 129, 0.15)",
+                                color: log.type === "대여" ? ACCENT : log.type === "소모" ? WARNING : OK,
                               }}
                             >
-                              {log.type === "대여" ? "대여" : "반납"}
+                              {log.type === "대여" ? "대여" : log.type === "소모" ? "소모" : "반납"}
                             </span>
                           </td>
                           <td style={{ padding: "11px 14px", color: TEXT_MAIN, fontWeight: 600 }}>
@@ -873,55 +934,106 @@ export default function RentLogsPage({
                           <td style={{ padding: "11px 14px", textAlign: "center" }}>
                             {log.type === "대여" ? (
                               isReturned ? (
-                                <button
-                                  disabled
-                                  style={{
-                                    background: isLightMode ? "rgba(16, 185, 129, 0.05)" : "rgba(16, 185, 129, 0.08)",
-                                    color: isLightMode ? "rgba(16, 185, 129, 0.6)" : "rgba(16, 185, 129, 0.5)",
-                                    border: isLightMode ? "1px solid rgba(16, 185, 129, 0.25)" : "1px solid rgba(16, 185, 129, 0.2)",
-                                    borderRadius: "6px",
-                                    padding: "4px 8px",
-                                    fontSize: "11px",
-                                    fontWeight: 700,
-                                    cursor: "not-allowed",
-                                    display: "inline-flex",
-                                    alignItems: "center",
-                                    gap: "3px",
-                                  }}
-                                >
-                                  <Check size={12} />
-                                  반납 완료
-                                </button>
+                                isConsumed ? (
+                                  <span
+                                    style={{
+                                      background: "rgba(245, 158, 11, 0.15)",
+                                      color: WARNING,
+                                      border: `1px solid rgba(245, 158, 11, 0.3)`,
+                                      borderRadius: "6px",
+                                      padding: "4px 8px",
+                                      fontSize: "11px",
+                                      fontWeight: 700,
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: "3px",
+                                    }}
+                                  >
+                                    <Check size={12} />
+                                    소모 완료
+                                  </span>
+                                ) : (
+                                  <span
+                                    style={{
+                                      background: "rgba(16, 185, 129, 0.15)",
+                                      color: OK,
+                                      border: `1px solid rgba(16, 185, 129, 0.3)`,
+                                      borderRadius: "6px",
+                                      padding: "4px 8px",
+                                      fontSize: "11px",
+                                      fontWeight: 700,
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: "3px",
+                                    }}
+                                  >
+                                    <Check size={12} />
+                                    반납 완료
+                                  </span>
+                                )
                               ) : (
-                                <button
-                                  onClick={() => handleInstantReturn(log)}
-                                  disabled={isReturning}
-                                  style={{
-                                    background: isReturning ? "rgba(165,180,252,0.1)" : "rgba(16, 185, 129, 0.15)",
-                                    color: isReturning ? TEXT_DIM : OK,
-                                    border: `1px solid ${isReturning ? "transparent" : "rgba(16, 185, 129, 0.3)"}`,
-                                    borderRadius: "6px",
-                                    padding: "4px 8px",
-                                    fontSize: "11px",
-                                    fontWeight: 700,
-                                    cursor: isReturning ? "not-allowed" : "pointer",
-                                    transition: "all 0.15s",
-                                  }}
-                                  onMouseEnter={(e) => {
-                                    if (!isReturning) {
-                                      e.currentTarget.style.background = OK;
-                                      e.currentTarget.style.color = "#ffffff";
-                                    }
-                                  }}
-                                  onMouseLeave={(e) => {
-                                    if (!isReturning) {
-                                      e.currentTarget.style.background = "rgba(16, 185, 129, 0.15)";
-                                      e.currentTarget.style.color = OK;
-                                    }
-                                  }}
-                                >
-                                  {isReturning ? "처리 중" : "즉시 반납"}
-                                </button>
+                                <div style={{ display: "flex", gap: "6px", justifyContent: "center" }}>
+                                  <button
+                                    onClick={() => handleInstantReturn(log)}
+                                    disabled={isReturning || isConsuming}
+                                    style={{
+                                      background: isReturning ? "rgba(165,180,252,0.1)" : "rgba(16, 185, 129, 0.15)",
+                                      color: isReturning ? TEXT_DIM : OK,
+                                      border: `1px solid ${isReturning ? "transparent" : "rgba(16, 185, 129, 0.3)"}`,
+                                      borderRadius: "6px",
+                                      padding: "4px 8px",
+                                      fontSize: "11px",
+                                      fontWeight: 700,
+                                      cursor: (isReturning || isConsuming) ? "not-allowed" : "pointer",
+                                      transition: "all 0.15s",
+                                      whiteSpace: "nowrap",
+                                    }}
+                                    onMouseEnter={(e) => {
+                                      if (!isReturning && !isConsuming) {
+                                        e.currentTarget.style.background = OK;
+                                        e.currentTarget.style.color = "#ffffff";
+                                      }
+                                    }}
+                                    onMouseLeave={(e) => {
+                                      if (!isReturning && !isConsuming) {
+                                        e.currentTarget.style.background = "rgba(16, 185, 129, 0.15)";
+                                        e.currentTarget.style.color = OK;
+                                      }
+                                    }}
+                                  >
+                                    {isReturning ? "처리 중" : "즉시 반납"}
+                                  </button>
+                                  <button
+                                    onClick={() => handleInstantConsume(log)}
+                                    disabled={isReturning || isConsuming}
+                                    style={{
+                                      background: isConsuming ? "rgba(253,186,116,0.1)" : "rgba(245, 158, 11, 0.15)",
+                                      color: isConsuming ? TEXT_DIM : WARNING,
+                                      border: `1px solid ${isConsuming ? "transparent" : "rgba(245, 158, 11, 0.3)"}`,
+                                      borderRadius: "6px",
+                                      padding: "4px 8px",
+                                      fontSize: "11px",
+                                      fontWeight: 700,
+                                      cursor: (isReturning || isConsuming) ? "not-allowed" : "pointer",
+                                      transition: "all 0.15s",
+                                      whiteSpace: "nowrap",
+                                    }}
+                                    onMouseEnter={(e) => {
+                                      if (!isReturning && !isConsuming) {
+                                        e.currentTarget.style.background = WARNING;
+                                        e.currentTarget.style.color = "#ffffff";
+                                      }
+                                    }}
+                                    onMouseLeave={(e) => {
+                                      if (!isReturning && !isConsuming) {
+                                        e.currentTarget.style.background = "rgba(245, 158, 11, 0.15)";
+                                        e.currentTarget.style.color = WARNING;
+                                      }
+                                    }}
+                                  >
+                                    {isConsuming ? "처리 중" : "소모 처리"}
+                                  </button>
+                                </div>
                               )
                             ) : (
                               <span style={{ color: TEXT_DIM }}>-</span>
@@ -941,8 +1053,7 @@ export default function RentLogsPage({
               <div>
                 {isGuestMode 
                   ? "대여 및 반납 신청은 구글 스프레드시트에 즉시 저장되며, 실시간 재고에 자동 연동됩니다." 
-                  : <>대여 로그는 구글 스프레드시트의 <strong>RentLog</strong> 시트에 실시간 동기화됩니다.</>
-                }
+                  : <>대여 로그는 구글 스프레드시트의 <strong>RentLog</strong> 시트에 실시간 동기화됩니다.</>}
               </div>
             </div>
           </div>

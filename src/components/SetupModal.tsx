@@ -64,7 +64,7 @@ function doGet(e) {
     let defectSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(DEFECT_SHEET_NAME);
     if (!defectSheet) {
       defectSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(DEFECT_SHEET_NAME);
-      defectSheet.getRange(1, 1, 1, 6).setValues([["제품명", "개수", "기록 시간", "불량 유형", "세부 사항", "대처 방안"]]);
+      defectSheet.getRange(1, 1, 1, 7).setValues([["제품명", "개수", "기록 시간", "불량 유형", "세부 사항", "대처 방안", "사진"]]);
     }
     
     // 대여로그 시트 가져오거나 없으면 자동 생성
@@ -127,7 +127,7 @@ function doPost(e) {
       let defectSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(DEFECT_SHEET_NAME);
       if (!defectSheet) {
         defectSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(DEFECT_SHEET_NAME);
-        defectSheet.getRange(1, 1, 1, 6).setValues([["제품명", "개수", "기록 시간", "불량 유형", "세부 사항", "대처 방안"]]);
+        defectSheet.getRange(1, 1, 1, 7).setValues([["제품명", "개수", "기록 시간", "불량 유형", "세부 사항", "대처 방안", "사진"]]);
       }
       const newRowIndex = addDefectLog(defectSheet, payload);
       return responseJSON({ success: true, rowIndex: newRowIndex });
@@ -253,13 +253,16 @@ function getDefectLogs(sheet) {
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return [];
   
-  const range = sheet.getRange(2, 1, lastRow - 1, 6);
+  const lastCol = Math.min(sheet.getLastColumn(), 7);
+  const range = sheet.getRange(2, 1, lastRow - 1, lastCol);
   const values = range.getValues();
   const displayValues = range.getDisplayValues();
   const logs = [];
   for (let i = 0; i < values.length; i++) {
     const row = values[i];
     const rawTs = row[2] instanceof Date ? formatDate(row[2]) : (row[2] ? String(row[2]).trim() : (displayValues[i][2] || ""));
+    const photoUrl = lastCol >= 7 ? String(row[6] || "").trim() : "";
+    
     logs.push({
       rowIndex: i + 2,
       timestamp: rawTs.replace(/^'/, ""),
@@ -269,7 +272,8 @@ function getDefectLogs(sheet) {
       defectType: String(row[3] || "").trim(),
       manager: "",
       note: String(row[4] || "").trim(),
-      actionTaken: String(row[5] || "").trim()
+      actionTaken: String(row[5] || "").trim(),
+      photo: photoUrl
     });
   }
   return logs;
@@ -279,6 +283,10 @@ function addDefectLog(sheet, log) {
   const lastRow = sheet.getLastRow();
   const nextRow = lastRow + 1;
   
+  if (sheet.getLastColumn() < 7) {
+    sheet.getRange(1, 7).setValue("사진");
+  }
+  
   const nowStr = formatDate(new Date());
   const ts = log.timestamp || nowStr;
   const rowValues = [
@@ -287,10 +295,11 @@ function addDefectLog(sheet, log) {
     ts.indexOf("'") === 0 ? ts : "'" + ts,
     log.defectType || "",
     log.note || "",
-    log.actionTaken || ""
+    log.actionTaken || "",
+    log.photo || ""
   ];
   
-  sheet.getRange(nextRow, 1, 1, 6).setValues([rowValues]);
+  sheet.getRange(nextRow, 1, 1, 7).setValues([rowValues]);
   return nextRow;
 }
 
@@ -423,7 +432,8 @@ function formatDate(date) {
 function responseJSON(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
-}`;
+}
+`;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(scriptCode);
@@ -543,7 +553,14 @@ function responseJSON(obj) {
             fontSize: "13px"
           }}
         />
-        {connectError && <div style={{ fontSize: 12, color: DANGER, marginBottom: 8 }}>{connectError}</div>}
+        {scriptUrl.includes("docs.google.com") && (
+          <div style={{ background: "rgba(244, 63, 94, 0.12)", border: `1px solid ${DANGER}`, color: "#fca5a5", borderRadius: "6px", padding: "10px", fontSize: "12px", marginBottom: "12px", lineHeight: "1.5" }}>
+            ⚠️ <b>입력하신 주소는 구글 스프레드시트 자체의 웹 브라우저 주소입니다.</b>
+            <br />
+            연동을 위해서는 스프레드시트 자체가 아닌, 스프레드시트 내 <b>[확장 프로그램] → [Apps Script]</b>에서 복사한 코드를 넣고 <b>[배포]</b>하여 발급받은 <b>웹 앱 URL(https://script.google.com/macros/s/.../exec)</b>을 입력해 주세요. (위의 설치 가이드를 클릭해 상세 설명을 확인하세요!)
+          </div>
+        )}
+        {connectError && <div style={{ fontSize: 12, color: DANGER, marginBottom: 8, whiteSpace: "pre-line" }}>{connectError}</div>}
 
         <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
           <button
