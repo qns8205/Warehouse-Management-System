@@ -21,6 +21,7 @@ export interface DefectLog {
   manager: string;
   note: string;
   actionTaken: string;
+  photo?: string;
 }
 
 export interface RentLog {
@@ -28,7 +29,7 @@ export interface RentLog {
   timestamp: string;
   location: string;
   name: string;
-  type: "대여" | "반납";
+  type: "대여" | "반납" | "소모";
   qty: number | string;
   user: string;
   note: string;

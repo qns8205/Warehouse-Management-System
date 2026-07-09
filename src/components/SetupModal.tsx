@@ -51,6 +51,7 @@ export default function SetupModal({
 const INVENTORY_SHEET_NAME = "시트1"; // 실제 사용 중인 스프레드시트의 시트 탭 이름으로 변경하세요.
 const DEFECT_SHEET_NAME = "불량로그";
 const RENT_SHEET_NAME = "대여로그";
+const USERS_SHEET_NAME = "Users";
 
 function doGet(e) {
   try {
@@ -64,7 +65,7 @@ function doGet(e) {
     let defectSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(DEFECT_SHEET_NAME);
     if (!defectSheet) {
       defectSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(DEFECT_SHEET_NAME);
-      defectSheet.getRange(1, 1, 1, 6).setValues([["제품명", "개수", "기록 시간", "불량 유형", "세부 사항", "대처 방안"]]);
+      defectSheet.getRange(1, 1, 1, 7).setValues([["제품명", "개수", "기록 시간", "불량 유형", "세부 사항", "대처 방안", "사진"]]);
     }
     
     // 대여로그 시트 가져오거나 없으면 자동 생성
@@ -73,13 +74,22 @@ function doGet(e) {
       rentSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(RENT_SHEET_NAME);
       rentSheet.getRange(1, 1, 1, 7).setValues([["기록 시간", "구분", "위치", "제품명", "수량", "대여자 성함", "메모"]]);
     }
+
+    // Users 시트 가져오거나 없으면 자동 생성
+    let usersSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(USERS_SHEET_NAME);
+    if (!usersSheet) {
+      usersSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(USERS_SHEET_NAME);
+      usersSheet.getRange(1, 1, 1, 3).setValues([["아이디", "비밀번호", "이름"]]);
+      usersSheet.getRange(2, 1, 1, 3).setValues([["admin", "1234", "관리자"]]);
+    }
     
     if (action === "getAll") {
       const inventory = getInventoryData(sheet);
       const sectors = getSectorLayout();
       const defectLogs = getDefectLogs(defectSheet);
       const rentLogs = getRentLogs(rentSheet);
-      return responseJSON({ success: true, inventory: inventory, sectors: sectors, defectLogs: defectLogs, rentLogs: rentLogs });
+      const users = getUsersData(usersSheet);
+      return responseJSON({ success: true, inventory: inventory, sectors: sectors, defectLogs: defectLogs, rentLogs: rentLogs, users: users });
     }
     
     return responseJSON({ success: false, error: "알 수 없는 GET 액션입니다." });
@@ -127,7 +137,7 @@ function doPost(e) {
       let defectSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(DEFECT_SHEET_NAME);
       if (!defectSheet) {
         defectSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(DEFECT_SHEET_NAME);
-        defectSheet.getRange(1, 1, 1, 6).setValues([["제품명", "개수", "기록 시간", "불량 유형", "세부 사항", "대처 방안"]]);
+        defectSheet.getRange(1, 1, 1, 7).setValues([["제품명", "개수", "기록 시간", "불량 유형", "세부 사항", "대처 방안", "사진"]]);
       }
       const newRowIndex = addDefectLog(defectSheet, payload);
       return responseJSON({ success: true, rowIndex: newRowIndex });
@@ -154,7 +164,7 @@ function doPost(e) {
             let currentStock = Number(stockCell.getValue() || 0);
             const qtyChange = Number(payload.qty || 0);
             
-            if (payload.type === "대여") {
+            if (payload.type === "대여" || payload.type === "소모") {
               currentStock = Math.max(0, currentStock - qtyChange);
             } else if (payload.type === "반납") {
               currentStock = currentStock + qtyChange;
@@ -253,13 +263,16 @@ function getDefectLogs(sheet) {
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return [];
   
-  const range = sheet.getRange(2, 1, lastRow - 1, 6);
+  const lastCol = Math.min(sheet.getLastColumn(), 7);
+  const range = sheet.getRange(2, 1, lastRow - 1, lastCol);
   const values = range.getValues();
   const displayValues = range.getDisplayValues();
   const logs = [];
   for (let i = 0; i < values.length; i++) {
     const row = values[i];
-    const rawTs = row[2] instanceof Date ? formatDate(row[2]) : (row[2] ? String(row[2]).trim() : (displayValues[i][2] || ""));
+    const rawTs = displayValues[i][2] ? String(displayValues[i][2]).trim() : (row[2] instanceof Date ? formatDate(row[2]) : String(row[2] || "").trim());
+    const photoUrl = lastCol >= 7 ? String(row[6] || "").trim() : "";
+    
     logs.push({
       rowIndex: i + 2,
       timestamp: rawTs.replace(/^'/, ""),
@@ -269,7 +282,8 @@ function getDefectLogs(sheet) {
       defectType: String(row[3] || "").trim(),
       manager: "",
       note: String(row[4] || "").trim(),
-      actionTaken: String(row[5] || "").trim()
+      actionTaken: String(row[5] || "").trim(),
+      photo: photoUrl
     });
   }
   return logs;
@@ -279,6 +293,10 @@ function addDefectLog(sheet, log) {
   const lastRow = sheet.getLastRow();
   const nextRow = lastRow + 1;
   
+  if (sheet.getLastColumn() < 7) {
+    sheet.getRange(1, 7).setValue("사진");
+  }
+  
   const nowStr = formatDate(new Date());
   const ts = log.timestamp || nowStr;
   const rowValues = [
@@ -287,10 +305,11 @@ function addDefectLog(sheet, log) {
     ts.indexOf("'") === 0 ? ts : "'" + ts,
     log.defectType || "",
     log.note || "",
-    log.actionTaken || ""
+    log.actionTaken || "",
+    log.photo || ""
   ];
   
-  sheet.getRange(nextRow, 1, 1, 6).setValues([rowValues]);
+  sheet.getRange(nextRow, 1, 1, 7).setValues([rowValues]);
   return nextRow;
 }
 
@@ -415,15 +434,42 @@ function deleteSector(sectorId) {
   } catch (e) {}
 }
 
+function getUsersData(sheet) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [{ id: "admin", password: "1234", name: "관리자" }];
+  
+  const range = sheet.getRange(2, 1, lastRow - 1, 3);
+  const values = range.getValues();
+  const users = [];
+  for (let i = 0; i < values.length; i++) {
+    const row = values[i];
+    const idVal = String(row[0] || "").trim();
+    if (idVal) {
+      users.push({
+        id: idVal,
+        password: String(row[1] || "").trim(),
+        name: String(row[2] || "").trim()
+      });
+    }
+  }
+  return users;
+}
+
 function formatDate(date) {
-  const pad = function(n) { return String(n).padStart(2, "0"); };
-  return date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate()) + " " + pad(date.getHours()) + ":" + pad(date.getMinutes()) + ":" + pad(date.getSeconds());
+  try {
+    const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
+    return Utilities.formatDate(date, tz, "yyyy-MM-dd HH:mm:ss");
+  } catch (err) {
+    const pad = function(n) { return String(n).padStart(2, "0"); };
+    return date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate()) + " " + pad(date.getHours()) + ":" + pad(date.getMinutes()) + ":" + pad(date.getSeconds());
+  }
 }
 
 function responseJSON(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
-}`;
+}
+`;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(scriptCode);
@@ -495,7 +541,7 @@ function responseJSON(obj) {
             </button>
           </div>
           <p style={{ fontSize: 11.5, color: TEXT_DIM, margin: 0, lineHeight: 1.5 }}>
-            이 코드에는 <b>Column H (특이사항)</b> 매핑, 구글 드라이브 사진 연동 지원, 그리고 <b>'불량로그' 자동 생성 및 실시간 동기화 기록 기능</b>이 완벽하게 반영되어 있습니다.
+            이 코드에는 <b>Column H (특이사항)</b> 매핑, 구글 드라이브 사진 연동 지원, 그리고 <b>'불량로그' 사진 등록(7번째 열) 및 자동 생성, 실시간 양방향 동기화 기능</b>이 완벽하게 반영되어 있습니다. <span style={{ color: OK, fontWeight: "bold" }}>(이미 연동 중이신 분들은 아래의 코드를 다시 복사하여 확장 프로그램 → Apps Script에 붙여넣으신 후, [배포] → [새 배포(또는 새 버전)]로 반드시 업데이트하셔야 사진이 유실되지 않고 정상 저장됩니다!)</span>
           </p>
         </div>
 
@@ -543,7 +589,14 @@ function responseJSON(obj) {
             fontSize: "13px"
           }}
         />
-        {connectError && <div style={{ fontSize: 12, color: DANGER, marginBottom: 8 }}>{connectError}</div>}
+        {scriptUrl.includes("docs.google.com") && (
+          <div style={{ background: "rgba(244, 63, 94, 0.12)", border: `1px solid ${DANGER}`, color: "#fca5a5", borderRadius: "6px", padding: "10px", fontSize: "12px", marginBottom: "12px", lineHeight: "1.5" }}>
+            ⚠️ <b>입력하신 주소는 구글 스프레드시트 자체의 웹 브라우저 주소입니다.</b>
+            <br />
+            연동을 위해서는 스프레드시트 자체가 아닌, 스프레드시트 내 <b>[확장 프로그램] → [Apps Script]</b>에서 복사한 코드를 넣고 <b>[배포]</b>하여 발급받은 <b>웹 앱 URL(https://script.google.com/macros/s/.../exec)</b>을 입력해 주세요. (위의 설치 가이드를 클릭해 상세 설명을 확인하세요!)
+          </div>
+        )}
+        {connectError && <div style={{ fontSize: 12, color: DANGER, marginBottom: 8, whiteSpace: "pre-line" }}>{connectError}</div>}
 
         <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
           <button

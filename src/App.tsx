@@ -119,7 +119,8 @@ export default function App() {
     const cached = localStorage.getItem("wms_current_user");
     return cached ? JSON.parse(cached) : null;
   });
-  const [showRentModal, setShowRentModal] = useState<{ item: InventoryItem; actionType: "대여" | "반납" } | null>(null);
+  const [showRentModal, setShowRentModal] = useState<{ item: InventoryItem; actionType: "대여" | "반납" | "소모" } | null>(null);
+  const [modalActionType, setModalActionType] = useState<"대여" | "반납" | "소모">("대여");
   const [rentUserName, setRentUserName] = useState("");
   const [rentQty, setRentQty] = useState(1);
   const [rentNote, setRentNote] = useState("");
@@ -138,6 +139,7 @@ export default function App() {
       setRentUserName("");
       setRentQty(1);
       setRentNote("");
+      setModalActionType(showRentModal.actionType);
     }
   }, [showRentModal]);
 
@@ -253,6 +255,7 @@ export default function App() {
   // 2. Refs
   const pendingUpdates = useRef<{ [rowIndex: number]: { stock: number; expiry: number } }>({});
   const canvasRef = useRef<HTMLDivElement>(null);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
   const dragState = useRef<{ id: string; startX: number; startY: number; origX: number; origY: number; zoom: number } | null>(null);
   const rotateState = useRef<{ id: string; cx: number; cy: number; startAngle: number } | null>(null);
   const panState = useRef<{ startX: number; startY: number; origPan: { x: number; y: number } } | null>(null);
@@ -278,6 +281,23 @@ export default function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMobile]);
+
+  // 3-2. 검색결과 외부 클릭 감지하여 닫기 및 화면 전환 시 자동 닫기
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(event.target as Node)) {
+        setSearchOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
+
+  useEffect(() => {
+    setSearchOpen(false);
+  }, [currentView]);
 
   // 4. 초기 레이아웃 복원
   useEffect(() => {
@@ -392,6 +412,9 @@ export default function App() {
       if (text.includes("Google Accounts") || text.includes("login") || text.includes("Sign in")) {
         throw new Error("구글 웹앱 배포 설정이 잘못되었습니다. 웹앱을 배포할 때 '액세스 권한이 있는 사용자'를 반드시 '모든 사용자(Anyone)'로 설정하고 승인하셔야 합니다. 그렇지 않으면 외부 로그인이 요구되어 연동이 실패합니다.");
       }
+      if (text.includes("현재 파일을 열 수 없습니다") || text.includes("페이지를 찾을 수 없음") || text.includes("google.com/drive") || scriptUrl.includes("docs.google.com/spreadsheets")) {
+        throw new Error("입력하신 연동 URL이 Apps Script 웹앱 URL이 아니라 구글 스프레드시트 자체 주소입니다. 스프레드시트의 확장 프로그램 -> Apps Script 메뉴에서 배포한 웹앱 URL(https://script.google.com/macros/s/.../exec)을 입력하셔야 정상 연동됩니다.");
+      }
       throw new Error(`스프레드시트가 올바르지 않은 응답(HTML)을 반환했습니다. 웹앱을 '새 버전'으로 배포하고 최신 배포 URL을 올바르게 등록했는지 확인하세요.`);
     }
     
@@ -417,6 +440,9 @@ export default function App() {
       console.error("Non-JSON Response received on fetchAll:", text);
       if (text.includes("Google Accounts") || text.includes("login") || text.includes("Sign in")) {
         throw new Error("구글 웹앱 배포 설정이 잘못되었습니다. 웹앱을 배포할 때 '액세스 권한이 있는 사용자'를 '모든 사용자(Anyone)'로 설정해 주세요.");
+      }
+      if (text.includes("현재 파일을 열 수 없습니다") || text.includes("페이지를 찾을 수 없음") || text.includes("google.com/drive") || scriptUrl.includes("docs.google.com/spreadsheets")) {
+        throw new Error("입력하신 연동 URL이 Apps Script 웹앱 URL이 아니라 구글 스프레드시트 자체 주소입니다. 스프레드시트의 확장 프로그램 -> Apps Script 메뉴에서 배포한 웹앱 URL(https://script.google.com/macros/s/.../exec)을 입력하셔야 정상 연동됩니다.");
       }
       throw new Error(`올바르지 않은 데이터 형식입니다. 웹앱 URL 및 배포 설정을 확인하세요.`);
     }
@@ -502,10 +528,28 @@ export default function App() {
 
   // 첫 연동 테스트
   async function handleConnect() {
-    if (!scriptUrl.trim()) {
+    const cleanUrl = scriptUrl.trim();
+    if (!cleanUrl) {
       setConnectError("구글 스프레드시트 Apps Script URL을 올바르게 채워주세요.");
       return;
     }
+    if (cleanUrl.includes("docs.google.com/spreadsheets")) {
+      setConnectError(
+        "⚠️ 입력하신 주소는 구글 스프레드시트 자체의 웹 브라우저 주소입니다.\n\n" +
+        "연동을 위해서는 스프레드시트 자체가 아니라, 스프레드시트 내 [확장 프로그램] → [Apps Script]에서 복사한 코드를 넣고 [배포]하여 발급받은 '웹 앱 URL'(https://script.google.com/macros/s/.../exec)을 입력하셔야 합니다.\n" +
+        "상세한 방법은 아래 '설치 가이드'를 펼쳐서 확인해 주세요."
+      );
+      return;
+    }
+    if (!cleanUrl.startsWith("https://script.google.com/") && cleanUrl !== DEFAULT_SCRIPT_URL) {
+      setConnectError(
+        "⚠️ 올바른 구글 Apps Script 웹앱 URL 형식이 아닙니다.\n" +
+        "URL은 반드시 'https://script.google.com/macros/s/.../exec' 형태여야 합니다.\n" +
+        "입력하신 주소를 다시 확인해 주세요."
+      );
+      return;
+    }
+
     setConnecting(true);
     setConnectError("");
     try {
@@ -1142,7 +1186,13 @@ export default function App() {
     let nextStock: number | null = null;
 
     if (targetItem && typeof targetItem.stock === "number") {
-      nextStock = log.type === "대여" ? Math.max(0, targetItem.stock - Number(log.qty)) : targetItem.stock + Number(log.qty);
+      if (log.note && log.note.includes("[소모완료]")) {
+        nextStock = targetItem.stock; // No change to stock
+      } else if (log.type === "대여" || log.type === "소모") {
+        nextStock = Math.max(0, targetItem.stock - Number(log.qty));
+      } else {
+        nextStock = targetItem.stock + Number(log.qty);
+      }
     }
 
     if (rIndex !== undefined && nextStock !== null) {
@@ -1170,7 +1220,14 @@ export default function App() {
               updatedAt: log.timestamp,
             };
           }
-          const calculatedNext = log.type === "대여" ? Math.max(0, currentStock - Number(log.qty)) : currentStock + Number(log.qty);
+          let calculatedNext = currentStock;
+          if (log.note && log.note.includes("[소모완료]")) {
+            calculatedNext = currentStock; // No change to stock
+          } else if (log.type === "대여" || log.type === "소모") {
+            calculatedNext = Math.max(0, currentStock - Number(log.qty));
+          } else {
+            calculatedNext = currentStock + Number(log.qty);
+          }
           return {
             ...it,
             stock: calculatedNext,
@@ -1751,7 +1808,7 @@ export default function App() {
         </div>
 
         {/* 품목 실시간 검색란 */}
-        <div style={{ position: "relative", width: 440 }}>
+        <div ref={searchContainerRef} style={{ position: "relative", width: 440 }}>
           <div
             style={{
               display: "flex",
@@ -2502,14 +2559,14 @@ export default function App() {
               style={{
                 fontSize: "16px",
                 fontWeight: 800,
-                color: showRentModal.actionType === "대여" ? "#818cf8" : "#10b981",
+                color: modalActionType === "대여" ? "#818cf8" : modalActionType === "소모" ? "#f59e0b" : "#10b981",
                 marginBottom: "16px",
                 display: "flex",
                 alignItems: "center",
                 gap: "6px",
               }}
             >
-              {showRentModal.actionType === "대여" ? "📋 물품 대여 신청" : "🔄 물품 반납 접수"}
+              {modalActionType === "대여" ? "📋 물품 대여 신청" : modalActionType === "소모" ? "🔥 물품 소모 신청" : "🔄 물품 반납 접수"}
             </h3>
 
             <div style={{ background: "var(--input-bg, #0f172a)", padding: "12px", borderRadius: "8px", marginBottom: "16px", fontSize: "13px" }}>
@@ -2523,10 +2580,70 @@ export default function App() {
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginBottom: "20px" }}>
-              {/* 대여/반납자 입력 */}
+              {/* 구분 선택 (대여 / 반납 / 소모) */}
               <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                 <label style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-main, #f1f5f9)" }}>
-                  {showRentModal.actionType === "대여" ? "대여 담당자 이름" : "반납자 이름"} <span style={{ color: "#f43f5e" }}>*</span>
+                  구분
+                </label>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "6px", background: "var(--input-bg, #0f172a)", padding: "4px", borderRadius: "8px", border: "1px solid var(--panel-border, #334155)" }}>
+                  <button
+                    type="button"
+                    onClick={() => setModalActionType("대여")}
+                    style={{
+                      padding: "6px 0",
+                      borderRadius: "6px",
+                      border: "none",
+                      fontSize: "12px",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      background: modalActionType === "대여" ? "#4f46e5" : "transparent",
+                      color: modalActionType === "대여" ? "#ffffff" : "var(--text-dim, #94a3b8)",
+                      transition: "all 0.15s",
+                    }}
+                  >
+                    대여
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setModalActionType("반납")}
+                    style={{
+                      padding: "6px 0",
+                      borderRadius: "6px",
+                      border: "none",
+                      fontSize: "12px",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      background: modalActionType === "반납" ? "#10b981" : "transparent",
+                      color: modalActionType === "반납" ? "#ffffff" : "var(--text-dim, #94a3b8)",
+                      transition: "all 0.15s",
+                    }}
+                  >
+                    반납
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setModalActionType("소모")}
+                    style={{
+                      padding: "6px 0",
+                      borderRadius: "6px",
+                      border: "none",
+                      fontSize: "12px",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      background: modalActionType === "소모" ? "#f59e0b" : "transparent",
+                      color: modalActionType === "소모" ? "#ffffff" : "var(--text-dim, #94a3b8)",
+                      transition: "all 0.15s",
+                    }}
+                  >
+                    소모
+                  </button>
+                </div>
+              </div>
+
+              {/* 대여/반납/소모자 입력 */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                <label style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-main, #f1f5f9)" }}>
+                  {modalActionType === "대여" ? "대여 담당자 이름" : modalActionType === "소모" ? "소모 담당자 이름" : "반납자 이름"} <span style={{ color: "#f43f5e" }}>*</span>
                 </label>
                 <input
                   type="text"
@@ -2549,12 +2666,12 @@ export default function App() {
               {/* 수량 입력 */}
               <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                 <label style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-main, #f1f5f9)" }}>
-                  {showRentModal.actionType === "대여" ? "대여 수량" : "반납 수량"} <span style={{ color: "#f43f5e" }}>*</span>
+                  {modalActionType === "대여" ? "대여 수량" : modalActionType === "소모" ? "소모 수량" : "반납 수량"} <span style={{ color: "#f43f5e" }}>*</span>
                 </label>
                 <input
                   type="number"
                   min={1}
-                  max={showRentModal.actionType === "대여" ? (typeof showRentModal.item.stock === "number" ? showRentModal.item.stock : undefined) : undefined}
+                  max={(modalActionType === "대여" || modalActionType === "소모") ? (typeof showRentModal.item.stock === "number" ? showRentModal.item.stock : undefined) : undefined}
                   value={rentQty}
                   onChange={(e) => setRentQty(Math.max(1, parseInt(e.target.value) || 1))}
                   style={{
@@ -2567,9 +2684,9 @@ export default function App() {
                     outline: "none",
                   }}
                 />
-                {showRentModal.actionType === "대여" && typeof showRentModal.item.stock === "number" && rentQty > showRentModal.item.stock && (
+                {(modalActionType === "대여" || modalActionType === "소모") && typeof showRentModal.item.stock === "number" && rentQty > showRentModal.item.stock && (
                   <span style={{ fontSize: "11px", color: "#f43f5e" }}>
-                    재고 수량({showRentModal.item.stock}개)을 초과하여 대여할 수 없습니다.
+                    재고 수량({showRentModal.item.stock}개)을 초과하여 처리할 수 없습니다.
                   </span>
                 )}
               </div>
@@ -2581,7 +2698,7 @@ export default function App() {
                 </label>
                 <input
                   type="text"
-                  placeholder="예: 테스트 목적 대여"
+                  placeholder="예: 테스트 목적 사용"
                   value={rentNote}
                   onChange={(e) => setRentNote(e.target.value)}
                   style={{
@@ -2619,7 +2736,7 @@ export default function App() {
                     showToast("담당자 이름을 입력해주세요.", "warn");
                     return;
                   }
-                  if (showRentModal.actionType === "대여" && typeof showRentModal.item.stock === "number" && rentQty > showRentModal.item.stock) {
+                  if ((modalActionType === "대여" || modalActionType === "소모") && typeof showRentModal.item.stock === "number" && rentQty > showRentModal.item.stock) {
                     showToast("재고 수량이 부족합니다.", "warn");
                     return;
                   }
@@ -2628,7 +2745,7 @@ export default function App() {
                     timestamp: formatTimestampLocal(),
                     location: showRentModal.item.location,
                     name: showRentModal.item.name,
-                    type: showRentModal.actionType,
+                    type: modalActionType,
                     qty: rentQty,
                     user: rentUserName.trim(),
                     note: rentNote.trim() || undefined,
@@ -2637,19 +2754,19 @@ export default function App() {
                   handleAddRentLog(log);
                   setShowRentModal(null);
                 }}
-                disabled={showRentModal.actionType === "대여" && typeof showRentModal.item.stock === "number" && rentQty > showRentModal.item.stock}
+                disabled={(modalActionType === "대여" || modalActionType === "소모") && typeof showRentModal.item.stock === "number" && rentQty > showRentModal.item.stock}
                 style={{
-                  background: showRentModal.actionType === "대여" ? "#4f46e5" : "#10b981",
+                  background: modalActionType === "대여" ? "#4f46e5" : modalActionType === "소모" ? "#f59e0b" : "#10b981",
                   color: "#ffffff",
                   padding: "10px 20px",
                   borderRadius: "8px",
                   fontSize: "13px",
                   fontWeight: 700,
                   cursor: "pointer",
-                  opacity: showRentModal.actionType === "대여" && typeof showRentModal.item.stock === "number" && rentQty > showRentModal.item.stock ? 0.5 : 1,
+                  opacity: (modalActionType === "대여" || modalActionType === "소모") && typeof showRentModal.item.stock === "number" && rentQty > showRentModal.item.stock ? 0.5 : 1,
                 }}
               >
-                {showRentModal.actionType === "대여" ? "대여하기" : "반납하기"}
+                {modalActionType === "대여" ? "대여하기" : modalActionType === "소모" ? "소모하기" : "반납하기"}
               </button>
             </div>
           </div>
