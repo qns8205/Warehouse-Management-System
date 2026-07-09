@@ -89,7 +89,19 @@ function doGet(e) {
       const defectLogs = getDefectLogs(defectSheet);
       const rentLogs = getRentLogs(rentSheet);
       const users = getUsersData(usersSheet);
-      return responseJSON({ success: true, inventory: inventory, sectors: sectors, defectLogs: defectLogs, rentLogs: rentLogs, users: users });
+      let robotObjects = [];
+      try {
+        robotObjects = getRobotObjects(SpreadsheetApp.getActiveSpreadsheet());
+      } catch (err) {}
+      return responseJSON({
+        success: true,
+        inventory: inventory,
+        sectors: sectors,
+        defectLogs: defectLogs,
+        rentLogs: rentLogs,
+        users: users,
+        robotObjects: robotObjects
+      });
     }
     
     return responseJSON({ success: false, error: "알 수 없는 GET 액션입니다." });
@@ -297,20 +309,145 @@ function addDefectLog(sheet, log) {
     sheet.getRange(1, 7).setValue("사진");
   }
   
+  // Use original log name exactly as-is (parentheses processing is removed)
+  let pName = String(log.name || "알수없음").trim();
+  
+  let photoVal = log.photo || "";
+  if (photoVal.indexOf("data:image/") === 0) {
+    try {
+      const parts = photoVal.split(",");
+      const mimeType = parts[0].split(";")[0].split(":")[1];
+      const base64Data = parts[1];
+      const decoded = Utilities.base64Decode(base64Data);
+      const ext = mimeType.split("/")[1] || "jpeg";
+      
+      // Determine folder
+      let folder;
+      try {
+        folder = DriveApp.getFolderById("1gs7NcJWgFY37OZ4aEuG6Z-PNlmAfz6_R");
+      } catch (fErr) {
+        const folders = DriveApp.getFoldersByName("Image for Broken Item");
+        if (folders.hasNext()) {
+          folder = folders.next();
+        } else {
+          folder = DriveApp.createFolder("Image for Broken Item");
+        }
+      }
+
+      // Rename file format: "제품명_기록 시간_불량 유형"
+      const pType = String(log.defectType || "기타불량").trim();
+      const rawTs = String(log.timestamp || formatDate(new Date())).replace(/'/g, "").trim();
+      const safeTs = rawTs.replace(/[:\/]/g, "-");
+      const filename = pName + "_" + safeTs + "_" + pType + "." + ext;
+
+      const blob = Utilities.newBlob(decoded, mimeType, filename);
+      const file = folder.createFile(blob);
+      
+      // Cascading setSharing: handles corporate security policies restricting public links
+      try {
+        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      } catch (shareErr) {
+        try {
+          file.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW);
+        } catch (domainShareErr) {
+          // Keep private to the owner if sharing is completely locked down
+        }
+      }
+      
+      photoVal = "https://lh3.googleusercontent.com/d/" + file.getId();
+    } catch (e) {
+      photoVal = "업로드 실패: 구글 드라이브 접근 권한이 필요합니다. Apps Script 에디터 우측 상단 '실행(Run)'을 1회 실행하여 권한 승인을 완료해 주세요. (상세 오류: " + e.toString() + ")";
+    }
+  }
+  
   const nowStr = formatDate(new Date());
   const ts = log.timestamp || nowStr;
   const rowValues = [
-    log.name || "",
+    pName,
     log.qty === "" || log.qty == null ? "" : Number(log.qty),
     ts.indexOf("'") === 0 ? ts : "'" + ts,
     log.defectType || "",
     log.note || "",
     log.actionTaken || "",
-    log.photo || ""
+    photoVal
   ];
   
   sheet.getRange(nextRow, 1, 1, 7).setValues([rowValues]);
   return nextRow;
+}
+
+function getRobotObjects(ss) {
+  if (!ss) {
+    ss = SpreadsheetApp.getActiveSpreadsheet();
+  }
+  if (!ss) return [];
+  const sheet = ss.getSheetByName("로봇 오브젝트");
+  if (!sheet) return [];
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+  
+  const lastCol = Math.max(sheet.getLastColumn(), 5);
+  const range = sheet.getRange(1, 1, lastRow, lastCol); // Row 1 onwards to read headers dynamically
+  const values = range.getValues();
+  
+  // Dynamic header parsing to identify the correct column index for each property
+  const headers = values[0].map(function(h) {
+    return String(h || "").trim().toLowerCase();
+  });
+  
+  var nameColIdx = -1;
+  var idColIdx = -1;
+  var locColIdx = -1;
+  var specColIdx = -1;
+  var noteColIdx = -1;
+  
+  for (var j = 0; j < headers.length; j++) {
+    var h = headers[j];
+    if (!h) continue;
+    // Look for name/품목명/제품명 column
+    if (h === "name" || h.indexOf("품목") !== -1 || h.indexOf("제품") !== -1 || h === "이름" || h === "오브젝트" || h === "명칭") {
+      nameColIdx = j;
+    } else if (h === "id" || h === "코드" || h === "번호" || h.indexOf("아이디") !== -1) {
+      idColIdx = j;
+    } else if (h.indexOf("위치") !== -1 || h.indexOf("구역") !== -1 || h.indexOf("장소") !== -1 || h.indexOf("location") !== -1) {
+      locColIdx = j;
+    } else if (h.indexOf("규격") !== -1 || h.indexOf("서브") !== -1 || h.indexOf("spec") !== -1) {
+      specColIdx = j;
+    } else if (h.indexOf("비고") !== -1 || h.indexOf("메모") !== -1 || h.indexOf("note") !== -1 || h.indexOf("설명") !== -1) {
+      noteColIdx = j;
+    }
+  }
+  
+  // Fallback default indices if header name did not match
+  if (nameColIdx === -1) {
+    nameColIdx = (idColIdx === 0) ? 1 : 0;
+  }
+  if (idColIdx === -1) {
+    idColIdx = (nameColIdx === 0) ? 1 : 0;
+  }
+  if (locColIdx === -1) locColIdx = 2;
+  if (specColIdx === -1) specColIdx = 3;
+  if (noteColIdx === -1) noteColIdx = 4;
+
+  const objects = [];
+  // Row indices are 1-based, starting with row 2 (index 1 of values array)
+  for (var i = 1; i < values.length; i++) {
+    const row = values[i];
+    const rawName = nameColIdx < row.length ? String(row[nameColIdx] || "").trim() : "";
+    const rawId = idColIdx < row.length ? String(row[idColIdx] || "").trim() : "";
+    if (!rawName && !rawId) continue;
+    
+    objects.push({
+      rowIndex: i + 1,
+      name: rawName || rawId, // fallback to ID if name is empty
+      id: rawId,
+      location: locColIdx < row.length ? String(row[locColIdx] || "로봇 구역").trim() : "로봇 구역",
+      spec: specColIdx < row.length ? String(row[specColIdx] || "").trim() : "",
+      note: noteColIdx < row.length ? String(row[noteColIdx] || "").trim() : "",
+      stock: "N/A"
+    });
+  }
+  return objects;
 }
 
 function getRentLogs(sheet) {
@@ -469,6 +606,20 @@ function responseJSON(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
 }
+
+function testDrivePermission() {
+  try {
+    const folders = DriveApp.getFoldersByName("Image for Broken Item");
+    if (folders.hasNext()) {
+      Logger.log("성공: 구글 드라이브 권한이 정상 승인되었습니다! 기존 폴더를 감지했습니다.");
+    } else {
+      const folder = DriveApp.createFolder("Image for Broken Item");
+      Logger.log("성공: 구글 드라이브 권한이 정상 승인되었습니다! 새 폴더를 생성했습니다.");
+    }
+  } catch (e) {
+    Logger.log("실패: 권한 승인 중 오류가 발생했습니다. 에러: " + e.toString());
+  }
+}
 `;
 
   const handleCopy = () => {
@@ -560,7 +711,13 @@ function responseJSON(obj) {
               코드 상단의 <span className="mono" style={{ color: TEXT_MAIN }}>INVENTORY_SHEET_NAME</span> 값을 실제 시트 탭 이름(예: "시트1")으로 수정하고 저장합니다.
             </li>
             <li>
-              우측 상단의 <b>배포 (Deploy) → 새 배포 (New Deployment)</b>를 누릅니다.
+              <b>[구글 드라이브 권한(DriveApp) 승인 팝업 띄우기 (필수)]</b>: 에디터 화면 상단 툴바의 함수 선택 창(기본값: doGet)에서 <b style={{ color: OK }}>testDrivePermission</b>을 선택한 뒤, 바로 왼쪽의 <b style={{ color: OK }}>실행(Run)</b> 단추를 누릅니다.
+            </li>
+            <li>
+              화면에 <b>'권한 승인 필요(Authorization Required)'</b> 팝업창이 나타납니다. <b>[권한 검토]</b> → 계정 선택 → <b>[고급(Advanced)]</b> → <b>[Untitled project(으)로 이동]</b> → <b>[허용(Allow)]</b>을 순서대로 진행하여 권한을 꼭 승인해 주세요. (이 과정을 거쳐야 사진이 구글 드라이브에 정상 저장됩니다!)
+            </li>
+            <li>
+              권한 허용 완료 후, 우측 상단의 <b>배포 (Deploy) → 새 배포 (New Deployment)</b>를 누릅니다. (이미 기존 배포가 있다면, <b>배포 관리 → 수정(연필) → 버전 선택에서 '새 버전' 선택</b>으로 교체하여 배포하셔도 됩니다.)
             </li>
             <li>
               유형 선택 톱니바퀴에서 <b>웹 앱 (Web App)</b>을 고르고, 실행 사용자는 <b>나 (Me)</b>, 액세스할 수 있는 사람은 <b>모든 사람 (Anyone)</b>으로 지정해 배포를 누릅니다.
@@ -570,6 +727,12 @@ function responseJSON(obj) {
             </li>
           </ol>
         </details>
+
+        <div style={{ background: "rgba(16, 185, 129, 0.08)", border: "1px solid rgba(16, 185, 129, 0.3)", color: "#34d399", borderRadius: "8px", padding: "12px 14px", fontSize: "11.5px", marginBottom: "16px", lineHeight: "1.6" }}>
+          🚀 <b>[업데이트 완료: 구글 드라이브(DriveApp) 원본 화질 자동 저장 지원!]</b><br />
+          불량로그 등록 시 사진을 선택하거나 드래그앤드롭하면, 무손실 원본 화질의 이미지가 구글 드라이브의 전용 폴더에 안전하게 업로드되어 스프레드시트에 고정 주소로 연동됩니다.<br />
+          사내 보안 정책 등으로 인해 전체 공개 링크 생성이 제한되는 기업 계정 환경에서도 도메인 내 공유(setSharing) 권한을 자동으로 시도 및 처리하도록 완벽히 설계되어 안심하고 사용하실 수 있습니다!
+        </div>
 
         <label style={{ fontSize: 12, color: TEXT_DIM, display: "block", marginBottom: 6 }}>
           Apps Script 웹앱 URL (웹 앱 주소)

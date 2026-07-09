@@ -93,6 +93,14 @@ const DEMO_RENT_LOGS: RentLog[] = [
   }
 ];
 
+const DEMO_ROBOT_OBJECTS = [
+  { rowIndex: 2, name: "Gripper", location: "로봇팔 A", spec: "UR5e 그리퍼 조인트", note: "관절 마찰 마모 검사 필", stock: 3 },
+  { rowIndex: 3, name: "Intel Realsense", location: "로봇팔 B", spec: "D435i 카메라 모듈", note: "비전 캘리브레이션 필요", stock: 5 },
+  { rowIndex: 4, name: "Suction Cap", location: "흡착 스테이션", spec: "SMC 진공 패드", note: "흡착력 저하 시 즉시 교체", stock: 12 },
+  { rowIndex: 5, name: "Magnetic Sensor", location: "AGV-01 전면", spec: "AGV 가이드 센서", note: "자기 테이프 검출 거리 15mm", stock: 4 },
+  { rowIndex: 6, name: "Safety Scanner", location: "협동로봇 구역", spec: "SICK 안전 레이저 스캐너", note: "안전 필드 보호 영역 점검", stock: 2 }
+];
+
 /* ============================================================
    메인 컴포넌트 (창고 구역 관리 및 구글 스프레드시트 실시간 연동)
    ============================================================ */
@@ -106,6 +114,10 @@ export default function App() {
   const [defectLogs, setDefectLogs] = useState<DefectLog[]>(() => {
     const cached = localStorage.getItem("wms_cached_defect_logs");
     return cached ? JSON.parse(cached) : DEMO_DEFECT_LOGS;
+  });
+  const [robotObjects, setRobotObjects] = useState<any[]>(() => {
+    const cached = localStorage.getItem("wms_cached_robot_objects");
+    return cached ? JSON.parse(cached) : DEMO_ROBOT_OBJECTS;
   });
   const [rentLogs, setRentLogs] = useState<RentLog[]>(() => {
     const cached = localStorage.getItem("wms_cached_rent_logs");
@@ -476,6 +488,10 @@ export default function App() {
       if (data.defectLogs) {
         setDefectLogs(data.defectLogs);
       }
+      if (data.robotObjects) {
+        setRobotObjects(data.robotObjects);
+        localStorage.setItem("wms_cached_robot_objects", JSON.stringify(data.robotObjects));
+      }
       if (data.rentLogs) {
         setRentLogs(data.rentLogs);
       }
@@ -568,6 +584,11 @@ export default function App() {
 
       if (data.defectLogs) {
         setDefectLogs(data.defectLogs);
+      }
+
+      if (data.robotObjects) {
+        setRobotObjects(data.robotObjects);
+        localStorage.setItem("wms_cached_robot_objects", JSON.stringify(data.robotObjects));
       }
 
       if (data.rentLogs) {
@@ -2020,6 +2041,7 @@ export default function App() {
           <DefectLogsPage
             defectLogs={defectLogs}
             inventory={inventory}
+            robotObjects={robotObjects}
             onAddDefectLog={handleAddDefectLog}
             onClose={() => setCurrentView("monitor")}
             isLightMode={isLightMode}

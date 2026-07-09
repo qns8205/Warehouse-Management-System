@@ -7,6 +7,7 @@ import { isFuzzyMatch } from "../utils/drive";
 interface DefectLogsPageProps {
   defectLogs: DefectLog[];
   inventory: InventoryItem[];
+  robotObjects?: any[];
   onAddDefectLog: (log: Omit<DefectLog, "rowIndex">) => Promise<void>;
   onClose: () => void;
   isLightMode: boolean;
@@ -94,6 +95,7 @@ function formatTimestampToMinutes(tsStr: string): string {
 export default function DefectLogsPage({
   defectLogs,
   inventory,
+  robotObjects = [],
   onAddDefectLog,
   onClose,
   isLightMode,
@@ -107,6 +109,9 @@ export default function DefectLogsPage({
   const [actionTakenInput, setActionTakenInput] = useState("");
   const [photoInput, setPhotoInput] = useState<string>("");
   
+  // Tab-selector for items category: 랙 자재 vs 로봇 오브젝트
+  const [itemCategory, setItemCategory] = useState<"rack" | "robot">("rack");
+  
   // Custom manual input mode toggles
   const [manualItemName, setManualItemName] = useState(false);
   const [itemSearchQuery, setItemSearchQuery] = useState("");
@@ -119,57 +124,45 @@ export default function DefectLogsPage({
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [zoomedPhoto, setZoomedPhoto] = useState<string | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
 
-  // Resize and compress uploaded image to fit Google Sheets payload cleanly
-  const resizeImage = (file: File): Promise<string> => {
+  // Image Uploading States & Utilities
+  const [isDragging, setIsDragging] = useState(false);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+
+  // Read image file as original Base64 (No quality/resolution loss)
+  const readAsBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = (readerEvent) => {
-        const image = new Image();
-        image.onload = () => {
-          const canvas = document.createElement("canvas");
-          const max_size = 640; // Balanced high-resolution size for crisp visual quality
-          let width = image.width;
-          let height = image.height;
-          if (width > height) {
-            if (width > max_size) {
-              height *= max_size / width;
-              width = max_size;
-            }
-          } else {
-            if (height > max_size) {
-              width *= max_size / height;
-              height = max_size;
-            }
-          }
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext("2d");
-          if (ctx) {
-            ctx.drawImage(image, 0, 0, width, height);
-          }
-          const dataUrl = canvas.toDataURL("image/jpeg", 0.75); // 25% compression (75% quality) as requested
-          resolve(dataUrl);
-        };
-        image.onerror = (err) => reject(err);
-        image.src = readerEvent.target?.result as string;
-      };
+      reader.onload = () => resolve(reader.result as string);
       reader.onerror = (err) => reject(err);
       reader.readAsDataURL(file);
     });
   };
 
+  const processAndUploadFile = async (file: File) => {
+    try {
+      setIsUploadingImage(true);
+      setFormError(null);
+      
+      // Read original image as base64 (Guarantees original high-resolution)
+      const rawBase64 = await readAsBase64(file);
+      
+      // Keep the original base64 raw string for Google Drive upload.
+      // It will be sent via Apps Script API (addDefectLog) and converted to a permanent 
+      // direct drive link on the server.
+      setPhotoInput(rawBase64);
+    } catch (err: any) {
+      console.error("Image processing error:", err);
+      setFormError(`이미지 처리 실패. (에러: ${err.message || err})`);
+    } finally {
+      setIsUploadingImage(false);
+    }
+  };
+
   const handlePhotoFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    try {
-      const resized = await resizeImage(file);
-      setPhotoInput(resized);
-    } catch (err) {
-      console.error("Failed to process image:", err);
-      setFormError("이미지 처리 중 오류가 발생했습니다.");
-    }
+    await processAndUploadFile(file);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -186,13 +179,7 @@ export default function DefectLogsPage({
     setIsDragging(false);
     const file = e.dataTransfer.files?.[0];
     if (file && file.type.startsWith("image/")) {
-      try {
-        const resized = await resizeImage(file);
-        setPhotoInput(resized);
-      } catch (err) {
-        console.error("Failed to process image:", err);
-        setFormError("이미지 처리 중 오류가 발생했습니다.");
-      }
+      await processAndUploadFile(file);
     }
   };
 
@@ -221,14 +208,48 @@ export default function DefectLogsPage({
     );
   }, [uniqueItems, itemSearchQuery]);
 
+  // Extract unique robot objects for selection
+  const uniqueRobotObjects = useMemo(() => {
+    const seen = new Set<string>();
+    const items: { name: string; location: string; spec?: string }[] = [];
+    for (const item of robotObjects) {
+      if (item.name && !seen.has(item.name)) {
+        seen.add(item.name);
+        items.push({
+          name: item.name,
+          location: item.location || "",
+          spec: item.spec || "",
+        });
+      }
+    }
+    return items.sort((a, b) => a.name.localeCompare(b.name));
+  }, [robotObjects]);
+
+  const filteredRobotObjects = useMemo(() => {
+    if (!itemSearchQuery.trim()) return uniqueRobotObjects;
+    return uniqueRobotObjects.filter((item) =>
+      isFuzzyMatch(item.name || "", itemSearchQuery) ||
+      isFuzzyMatch(item.location || "", itemSearchQuery) ||
+      isFuzzyMatch(item.spec || "", itemSearchQuery)
+    );
+  }, [uniqueRobotObjects, itemSearchQuery]);
+
   const handleItemSelectChange = (name: string) => {
     setNameInput(name);
-    // Find item's location from inventory to set locationInput automatically
-    const found = inventory.find((item) => item.name === name);
-    if (found) {
-      setLocationInput(found.location || "-");
+    if (itemCategory === "rack") {
+      const found = inventory.find((item) => item.name === name);
+      if (found) {
+        setLocationInput(found.location || "-");
+      } else {
+        setLocationInput("-");
+      }
     } else {
-      setLocationInput("-");
+      const found = robotObjects.find((item) => item.name === name);
+      if (found) {
+        setLocationInput(found.location || "로봇 구역");
+      } else {
+        setLocationInput("로봇 구역");
+      }
     }
   };
 
@@ -258,16 +279,20 @@ export default function DefectLogsPage({
         finalLocation = found ? found.location || "미지정" : "미지정";
       }
 
+      // Use original name as-is without any extraction/cleanup
+      const cleanName = nameInput.trim();
+
       await onAddDefectLog({
         timestamp: timestampStr,
         location: finalLocation,
-        name: nameInput.trim(),
+        name: cleanName,
         qty: qtyInput,
         defectType,
         manager: "",
         note: noteInput.trim(),
         actionTaken: actionTakenInput.trim(),
         photo: photoInput || undefined,
+        itemCategory: itemCategory, // Pass category to Google Apps Script
       });
 
       // Reset form fields
@@ -493,11 +518,61 @@ export default function DefectLogsPage({
                 />
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {/* 분류 선택 (랙 자재 vs 로봇 오브젝트) */}
+                  <div style={{ display: "flex", gap: "8px", marginBottom: "4px" }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setItemCategory("rack");
+                        setNameInput("");
+                        setLocationInput("");
+                        setItemSearchQuery("");
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: "6px 8px",
+                        borderRadius: "6px",
+                        fontSize: "12px",
+                        fontWeight: 700,
+                        border: `1px solid ${itemCategory === "rack" ? ACCENT : PANEL_BORDER}`,
+                        background: itemCategory === "rack" ? `${ACCENT}15` : "transparent",
+                        color: itemCategory === "rack" ? "#a5b4fc" : TEXT_DIM,
+                        cursor: "pointer",
+                        transition: "all 0.2s"
+                      }}
+                    >
+                      🗄️ 랙 선반 자재
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setItemCategory("robot");
+                        setNameInput("");
+                        setLocationInput("");
+                        setItemSearchQuery("");
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: "6px 8px",
+                        borderRadius: "6px",
+                        fontSize: "12px",
+                        fontWeight: 700,
+                        border: `1px solid ${itemCategory === "robot" ? ACCENT : PANEL_BORDER}`,
+                        background: itemCategory === "robot" ? `${ACCENT}15` : "transparent",
+                        color: itemCategory === "robot" ? "#a5b4fc" : TEXT_DIM,
+                        cursor: "pointer",
+                        transition: "all 0.2s"
+                      }}
+                    >
+                      🤖 로봇 오브젝트
+                    </button>
+                  </div>
+
                   <div style={{ position: "relative" }}>
                     <Search size={14} style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", color: TEXT_DIM }} />
                     <input
                       type="text"
-                      placeholder="자재 목록 검색 (이름, 위치 등)..."
+                      placeholder={itemCategory === "rack" ? "랙 자재 목록 검색..." : "로봇 오브젝트 검색 (이름, 규격 등)..."}
                       value={itemSearchQuery}
                       onChange={(e) => setItemSearchQuery(e.target.value)}
                       style={{
@@ -512,30 +587,58 @@ export default function DefectLogsPage({
                       }}
                     />
                   </div>
-                  <select
-                    required
-                    value={nameInput}
-                    onChange={(e) => handleItemSelectChange(e.target.value)}
-                    style={{
-                      width: "100%",
-                      background: "var(--input-bg, #0f172a)",
-                      border: `1px solid ${PANEL_BORDER}`,
-                      color: TEXT_MAIN,
-                      padding: "10px 12px",
-                      borderRadius: "6px",
-                      fontSize: "13px",
-                    }}
-                  >
-                    <option value="">품목 선택... ({filteredUniqueItems.length}개 검색됨)</option>
-                    {filteredUniqueItems.map((item, idx) => (
-                      <option key={idx} value={item.name}>
-                        {item.name} {item.location ? `(${item.location})` : ""} {item.stock != null ? ` - 재고: ${item.stock}개` : ""}
-                      </option>
-                    ))}
-                    {filteredUniqueItems.length === 0 && (
-                      <option disabled>일치하는 자재 품목이 없습니다.</option>
-                    )}
-                  </select>
+
+                  {itemCategory === "rack" ? (
+                    <select
+                      required
+                      value={nameInput}
+                      onChange={(e) => handleItemSelectChange(e.target.value)}
+                      style={{
+                        width: "100%",
+                        background: "var(--input-bg, #0f172a)",
+                        border: `1px solid ${PANEL_BORDER}`,
+                        color: TEXT_MAIN,
+                        padding: "10px 12px",
+                        borderRadius: "6px",
+                        fontSize: "13px",
+                      }}
+                    >
+                      <option value="">랙 자재 선택... ({filteredUniqueItems.length}개 검색됨)</option>
+                      {filteredUniqueItems.map((item, idx) => (
+                        <option key={idx} value={item.name}>
+                          {item.name} {item.location ? `(${item.location})` : ""} {item.stock != null ? ` - 재고: ${item.stock}개` : ""}
+                        </option>
+                      ))}
+                      {filteredUniqueItems.length === 0 && (
+                        <option disabled>일치하는 자재 품목이 없습니다.</option>
+                      )}
+                    </select>
+                  ) : (
+                    <select
+                      required
+                      value={nameInput}
+                      onChange={(e) => handleItemSelectChange(e.target.value)}
+                      style={{
+                        width: "100%",
+                        background: "var(--input-bg, #0f172a)",
+                        border: `1px solid ${PANEL_BORDER}`,
+                        color: TEXT_MAIN,
+                        padding: "10px 12px",
+                        borderRadius: "6px",
+                        fontSize: "13px",
+                      }}
+                    >
+                      <option value="">로봇 오브젝트 선택... ({filteredRobotObjects.length}개 검색됨)</option>
+                      {filteredRobotObjects.map((item, idx) => (
+                        <option key={idx} value={item.name}>
+                          {item.name} {item.spec ? `[${item.spec}]` : ""} ({item.location})
+                        </option>
+                      ))}
+                      {filteredRobotObjects.length === 0 && (
+                        <option disabled>일치하는 로봇 오브젝트가 없습니다.</option>
+                      )}
+                    </select>
+                  )}
                 </div>
               )}
             </div>
@@ -635,35 +738,47 @@ export default function DefectLogsPage({
             {/* 사진 등록 */}
             <div>
               <label style={{ fontSize: "12.5px", display: "block", marginBottom: 6, fontWeight: 600 }}>📸 불량 현장 사진 등록</label>
-              {photoInput ? (
-                <div style={{ position: "relative", width: "100%", height: "140px", borderRadius: "8px", overflow: "hidden", border: `1px solid ${PANEL_BORDER}` }}>
-                  <img src={photoInput} alt="Uploaded preview" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              
+              {/* 이미지 주소(URL) 입력란 */}
+              <div style={{ display: "flex", gap: "6px", marginBottom: "8px" }}>
+                <input
+                  type="text"
+                  placeholder={photoInput && photoInput.startsWith("data:") ? "파일이 업로드되었습니다." : "인터넷 상의 이미지 고유 주소(URL) 직접 입력도 가능합니다"}
+                  value={photoInput && photoInput.startsWith("data:") ? "파일 업로드 완료 (저장 시 구글 드라이브에 원본 저장됨)" : photoInput}
+                  disabled={photoInput && photoInput.startsWith("data:") ? true : false}
+                  onChange={(e) => setPhotoInput(e.target.value.trim())}
+                  style={{
+                    flex: 1,
+                    background: photoInput && photoInput.startsWith("data:") ? "rgba(16, 185, 129, 0.05)" : "var(--input-bg, #0f172a)",
+                    border: photoInput && photoInput.startsWith("data:") ? "1px solid rgba(16, 185, 129, 0.3)" : `1px solid ${PANEL_BORDER}`,
+                    color: photoInput && photoInput.startsWith("data:") ? "#34d399" : TEXT_MAIN,
+                    padding: "8px 12px",
+                    borderRadius: "6px",
+                    fontSize: "12.5px",
+                    outline: "none",
+                  }}
+                />
+                {photoInput && (
                   <button
                     type="button"
                     onClick={() => setPhotoInput("")}
                     style={{
-                      position: "absolute",
-                      right: "8px",
-                      top: "8px",
                       background: "rgba(15, 23, 42, 0.75)",
-                      border: "none",
-                      color: "#ffffff",
-                      borderRadius: "50%",
-                      width: "28px",
-                      height: "28px",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
+                      border: `1px solid ${PANEL_BORDER}`,
+                      color: TEXT_DIM,
+                      borderRadius: "6px",
+                      padding: "0 10px",
+                      fontSize: "12px",
                       cursor: "pointer",
-                      transition: "background 0.15s"
                     }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = DANGER)}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = "rgba(15, 23, 42, 0.75)")}
                   >
-                    <X size={14} />
+                    초기화
                   </button>
-                </div>
-              ) : (
+                )}
+              </div>
+
+              {/* 드래그 앤 드롭 및 클릭 파일 업로드 영역 */}
+              {!photoInput && (
                 <div
                   onDragOver={handleDragOver}
                   onDragLeave={handleDragLeave}
@@ -671,8 +786,8 @@ export default function DefectLogsPage({
                   onClick={() => document.getElementById("defect-photo-upload")?.click()}
                   style={{
                     width: "100%",
-                    height: "100px",
-                    border: `2px dashed ${isDragging ? ACCENT : PANEL_BORDER}`,
+                    height: "90px",
+                    border: `1px dashed ${isDragging ? ACCENT : PANEL_BORDER}`,
                     borderRadius: "8px",
                     background: isDragging ? "rgba(99, 102, 241, 0.05)" : "var(--input-bg, #0f172a)",
                     display: "flex",
@@ -682,13 +797,16 @@ export default function DefectLogsPage({
                     gap: "6px",
                     cursor: "pointer",
                     transition: "all 0.15s",
+                    marginBottom: "8px"
                   }}
                 >
-                  <Upload size={20} style={{ color: isDragging ? ACCENT : TEXT_DIM }} />
-                  <span style={{ fontSize: "12px", color: TEXT_MAIN, fontWeight: 500 }}>
-                    {isDragging ? "여기에 이미지를 놓으세요" : "클릭하거나 이미지를 끌어다 놓으세요"}
+                  <Upload size={18} style={{ color: isDragging ? ACCENT : TEXT_DIM }} />
+                  <span style={{ fontSize: "11.5px", color: TEXT_MAIN, fontWeight: 500 }}>
+                    {isDragging ? "여기에 이미지를 놓으세요" : "클릭하거나 이미지를 끌어다 놓으세요 (구글 드라이브 자동 저장)"}
                   </span>
-                  <span style={{ fontSize: "11px", color: TEXT_DIM }}>PNG, JPG (자동 압축 및 연동)</span>
+                  <span style={{ fontSize: "10px", color: TEXT_DIM }}>
+                    무손실 원본 화질의 이미지 파일이 안전하게 보관됩니다
+                  </span>
                   <input
                     id="defect-photo-upload"
                     type="file"
@@ -698,6 +816,69 @@ export default function DefectLogsPage({
                   />
                 </div>
               )}
+
+              {/* 이미지 미리보기 */}
+              {photoInput ? (
+                <div style={{ position: "relative", width: "100%", height: "140px", borderRadius: "8px", overflow: "hidden", border: `1px solid ${PANEL_BORDER}`, background: "rgba(15, 23, 42, 0.4)" }}>
+                  <img 
+                    src={photoInput} 
+                    alt="Photo preview" 
+                    onError={(e) => {
+                      // If it's not base64 and fails, show error
+                      if (!photoInput.startsWith("data:")) {
+                        e.currentTarget.style.display = "none";
+                        const sibling = e.currentTarget.nextElementSibling as HTMLElement;
+                        if (sibling) sibling.style.display = "flex";
+                      }
+                    }}
+                    style={{ width: "100%", height: "100%", objectFit: "cover" }} 
+                  />
+                  <div 
+                    style={{ 
+                      display: "none", 
+                      width: "100%", 
+                      height: "100%", 
+                      alignItems: "center", 
+                      justifyContent: "center", 
+                      flexDirection: "column",
+                      gap: "4px",
+                      color: TEXT_DIM 
+                    }}
+                  >
+                    <AlertTriangle size={20} style={{ color: DANGER }} />
+                    <span style={{ fontSize: "11px" }}>올바르지 않은 이미지 주소이거나 불러올 수 없습니다.</span>
+                  </div>
+                  
+                  {/* 업로드 상태 배지 */}
+                  <div style={{
+                    position: "absolute",
+                    bottom: "8px",
+                    left: "8px",
+                    background: "rgba(15, 23, 42, 0.85)",
+                    border: `1px solid ${PANEL_BORDER}`,
+                    borderRadius: "4px",
+                    padding: "3px 6px",
+                    fontSize: "10px",
+                    color: photoInput.startsWith("data:") ? "#34d399" : ACCENT,
+                    fontWeight: 600,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "4px"
+                  }}>
+                    {photoInput.startsWith("data:") ? (
+                      <>
+                        <Check size={10} />
+                        드라이브 저장 예정 (원본 화질)
+                      </>
+                    ) : (
+                      <>
+                        <ImageIcon size={10} />
+                        외부 이미지 링크 연동됨
+                      </>
+                    )}
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             {formError && (

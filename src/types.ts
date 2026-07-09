@@ -22,6 +22,7 @@ export interface DefectLog {
   note: string;
   actionTaken: string;
   photo?: string;
+  itemCategory?: string;
 }
 
 export interface RentLog {
