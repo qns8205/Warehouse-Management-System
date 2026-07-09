@@ -81,7 +81,7 @@ export default function DefectLogsPage({
         const image = new Image();
         image.onload = () => {
           const canvas = document.createElement("canvas");
-          const max_size = 280; // Compact but clear representation
+          const max_size = 640; // Balanced high-resolution size for crisp visual quality
           let width = image.width;
           let height = image.height;
           if (width > height) {
@@ -101,7 +101,7 @@ export default function DefectLogsPage({
           if (ctx) {
             ctx.drawImage(image, 0, 0, width, height);
           }
-          const dataUrl = canvas.toDataURL("image/jpeg", 0.65); // High compression to save space
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.75); // 25% compression (75% quality) as requested
           resolve(dataUrl);
         };
         image.onerror = (err) => reject(err);

@@ -18,7 +18,7 @@ interface SidePanelProps {
   highlightedItemRowIndex?: number | null;
   onChangeStock: (item: InventoryItem, delta: number) => void;
   isAdmin?: boolean;
-  onRentItem?: (item: InventoryItem, actionType: "대여" | "반납") => void;
+  onRentItem?: (item: InventoryItem, actionType: "대여" | "반납" | "소모") => void;
   isLightMode?: boolean;
 }
 
@@ -759,136 +759,198 @@ export default function SidePanel({
                                   }}
                                 >
                                   {isAdmin ? (
-                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                                      {/* Stock modifier buttons */}
-                                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                        <button
-                                          onClick={() => onChangeStock(item, -1)}
-                                          disabled={typeof item.stock !== "number" || item.stock <= 0}
-                                          style={{
-                                            ...stepBtnStyle,
-                                            opacity: typeof item.stock !== "number" || item.stock <= 0 ? 0.35 : 1,
-                                            cursor: typeof item.stock !== "number" || item.stock <= 0 ? "not-allowed" : "pointer",
-                                          }}
-                                        >
-                                          −
-                                        </button>
-                                        {editingStockItemRowIndex === item.rowIndex ? (
-                                          <input
-                                            type="number"
-                                            min="0"
-                                            value={editingStockValue}
-                                            onChange={(e) => setEditingStockValue(e.target.value)}
-                                            onBlur={() => handleSaveStockInline(item)}
-                                            onKeyDown={(e) => {
-                                              if (e.key === "Enter") {
-                                                handleSaveStockInline(item);
-                                              } else if (e.key === "Escape") {
-                                                setEditingStockItemRowIndex(null);
-                                              }
-                                            }}
-                                            autoFocus
+                                    <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
+                                      {/* Row 1: Direct modifier & actions */}
+                                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                        {/* Stock modifier buttons */}
+                                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                          <button
+                                            onClick={() => onChangeStock(item, -1)}
+                                            disabled={typeof item.stock !== "number" || item.stock <= 0}
                                             style={{
-                                              width: "48px",
-                                              background: isLightMode ? "#ffffff" : "#020617",
-                                              border: `1.5px solid ${ACCENT}`,
-                                              borderRadius: "4px",
-                                              color: isLightMode ? "#0f172a" : "#ffffff",
-                                              textAlign: "center",
-                                              fontSize: "12px",
-                                              fontWeight: 700,
-                                              outline: "none",
-                                              padding: "1px 2px",
-                                            }}
-                                          />
-                                        ) : (
-                                          <span
-                                            className="mono"
-                                            onClick={() => {
-                                              if (typeof item.stock === "number") {
-                                                setEditingStockItemRowIndex(item.rowIndex);
-                                                setEditingStockValue(String(item.stock));
-                                              }
-                                            }}
-                                            title={typeof item.stock === "number" ? "수량 직접 입력하려면 클릭" : "N/A 수량은 직접 수정할 수 없습니다."}
-                                            style={{
-                                              fontSize: "12.5px",
-                                              fontWeight: 700,
-                                              minWidth: 26,
-                                              textAlign: "center",
-                                              color: item.stock === 0 ? DANGER : (item.stock === null || item.stock === "N/A") ? TEXT_DIM : OK,
-                                              cursor: typeof item.stock === "number" ? "pointer" : "default",
-                                              padding: "2px 6px",
-                                              borderRadius: "4px",
-                                              background: isLightMode ? "rgba(0,0,0,0.03)" : "rgba(255,255,255,0.05)",
-                                              border: "1px solid transparent",
-                                              transition: "all 0.15s",
-                                            }}
-                                            onMouseEnter={(e) => {
-                                              if (typeof item.stock === "number") {
-                                                e.currentTarget.style.border = `1px dashed ${ACCENT}`;
-                                                e.currentTarget.style.background = isLightMode ? "rgba(99, 102, 241, 0.08)" : "rgba(99, 102, 241, 0.15)";
-                                              }
-                                            }}
-                                            onMouseLeave={(e) => {
-                                              e.currentTarget.style.border = "1px solid transparent";
-                                              e.currentTarget.style.background = isLightMode ? "rgba(0,0,0,0.03)" : "rgba(255,255,255,0.05)";
+                                              ...stepBtnStyle,
+                                              opacity: typeof item.stock !== "number" || item.stock <= 0 ? 0.35 : 1,
+                                              cursor: typeof item.stock !== "number" || item.stock <= 0 ? "not-allowed" : "pointer",
                                             }}
                                           >
-                                            {item.stock === null || item.stock === "N/A" ? "N/A" : item.stock}
-                                          </span>
-                                        )}
-                                        <button
-                                          onClick={() => onChangeStock(item, 1)}
-                                          disabled={typeof item.stock !== "number"}
-                                          style={{
-                                            ...stepBtnStyle,
-                                            opacity: typeof item.stock !== "number" ? 0.35 : 1,
-                                            cursor: typeof item.stock !== "number" ? "not-allowed" : "pointer",
-                                          }}
-                                        >
-                                          +
-                                        </button>
+                                            −
+                                          </button>
+                                          {editingStockItemRowIndex === item.rowIndex ? (
+                                            <input
+                                              type="number"
+                                              min="0"
+                                              value={editingStockValue}
+                                              onChange={(e) => setEditingStockValue(e.target.value)}
+                                              onBlur={() => handleSaveStockInline(item)}
+                                              onKeyDown={(e) => {
+                                                if (e.key === "Enter") {
+                                                  handleSaveStockInline(item);
+                                                } else if (e.key === "Escape") {
+                                                  setEditingStockItemRowIndex(null);
+                                                }
+                                              }}
+                                              autoFocus
+                                              style={{
+                                                width: "48px",
+                                                background: isLightMode ? "#ffffff" : "#020617",
+                                                border: `1.5px solid ${ACCENT}`,
+                                                borderRadius: "4px",
+                                                color: isLightMode ? "#0f172a" : "#ffffff",
+                                                textAlign: "center",
+                                                fontSize: "12px",
+                                                fontWeight: 700,
+                                                outline: "none",
+                                                padding: "1px 2px",
+                                              }}
+                                            />
+                                          ) : (
+                                            <span
+                                              className="mono"
+                                              onClick={() => {
+                                                if (typeof item.stock === "number") {
+                                                  setEditingStockItemRowIndex(item.rowIndex);
+                                                  setEditingStockValue(String(item.stock));
+                                                }
+                                              }}
+                                              title={typeof item.stock === "number" ? "수량 직접 입력하려면 클릭" : "N/A 수량은 직접 수정할 수 없습니다."}
+                                              style={{
+                                                fontSize: "12.5px",
+                                                fontWeight: 700,
+                                                minWidth: 26,
+                                                textAlign: "center",
+                                                color: item.stock === 0 ? DANGER : (item.stock === null || item.stock === "N/A") ? TEXT_DIM : OK,
+                                                cursor: typeof item.stock === "number" ? "pointer" : "default",
+                                                padding: "2px 6px",
+                                                borderRadius: "4px",
+                                                background: isLightMode ? "rgba(0,0,0,0.03)" : "rgba(255,255,255,0.05)",
+                                                border: "1px solid transparent",
+                                                transition: "all 0.15s",
+                                              }}
+                                              onMouseEnter={(e) => {
+                                                if (typeof item.stock === "number") {
+                                                  e.currentTarget.style.border = `1px dashed ${ACCENT}`;
+                                                  e.currentTarget.style.background = isLightMode ? "rgba(99, 102, 241, 0.08)" : "rgba(99, 102, 241, 0.15)";
+                                                }
+                                              }}
+                                              onMouseLeave={(e) => {
+                                                e.currentTarget.style.border = "1px solid transparent";
+                                                e.currentTarget.style.background = isLightMode ? "rgba(0,0,0,0.03)" : "rgba(255,255,255,0.05)";
+                                              }}
+                                            >
+                                              {item.stock === null || item.stock === "N/A" ? "N/A" : item.stock}
+                                            </span>
+                                          )}
+                                          <button
+                                            onClick={() => onChangeStock(item, 1)}
+                                            disabled={typeof item.stock !== "number"}
+                                            style={{
+                                              ...stepBtnStyle,
+                                              opacity: typeof item.stock !== "number" ? 0.35 : 1,
+                                              cursor: typeof item.stock !== "number" ? "not-allowed" : "pointer",
+                                            }}
+                                          >
+                                            +
+                                          </button>
+                                        </div>
+
+                                        {/* Manager/Date and buttons */}
+                                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+                                            <span style={{ fontSize: "10px", color: TEXT_DIM }}>
+                                              {item.manager || "담당자 없음"}
+                                            </span>
+                                            <span style={{ fontSize: "9px", color: TEXT_DIM, marginTop: 1 }}>
+                                              {item.updatedAt ? item.updatedAt.split(" ")[0] : ""}
+                                            </span>
+                                          </div>
+                                          <div style={{ display: "flex", gap: 6 }}>
+                                            <button
+                                              onClick={() => onEditItem(item)}
+                                              title="수정"
+                                              style={{
+                                                background: "transparent",
+                                                border: "none",
+                                                color: TEXT_DIM,
+                                                cursor: "pointer",
+                                                padding: 2,
+                                              }}
+                                            >
+                                              <Edit3 size={12} />
+                                            </button>
+                                            <button
+                                              onClick={() => onDeleteItem(item.rowIndex)}
+                                              title="삭제"
+                                              style={{
+                                                background: "transparent",
+                                                border: "none",
+                                                color: DANGER,
+                                                cursor: "pointer",
+                                                padding: 2,
+                                              }}
+                                            >
+                                              <Trash2 size={12} />
+                                            </button>
+                                          </div>
+                                        </div>
                                       </div>
 
-                                      {/* Manager/Date and buttons */}
-                                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-                                          <span style={{ fontSize: "10px", color: TEXT_DIM }}>
-                                            {item.manager || "담당자 없음"}
-                                          </span>
-                                          <span style={{ fontSize: "9px", color: TEXT_DIM, marginTop: 1 }}>
-                                            {item.updatedAt ? item.updatedAt.split(" ")[0] : ""}
-                                          </span>
-                                        </div>
-                                        <div style={{ display: "flex", gap: 6 }}>
-                                          <button
-                                            onClick={() => onEditItem(item)}
-                                            title="수정"
-                                            style={{
-                                              background: "transparent",
-                                              border: "none",
-                                              color: TEXT_DIM,
-                                              cursor: "pointer",
-                                              padding: 2,
-                                            }}
-                                          >
-                                            <Edit3 size={12} />
-                                          </button>
-                                          <button
-                                            onClick={() => onDeleteItem(item.rowIndex)}
-                                            title="삭제"
-                                            style={{
-                                              background: "transparent",
-                                              border: "none",
-                                              color: DANGER,
-                                              cursor: "pointer",
-                                              padding: 2,
-                                            }}
-                                          >
-                                            <Trash2 size={12} />
-                                          </button>
-                                        </div>
+                                      {/* Row 2: Transaction quick actions for admin */}
+                                      <div style={{ display: "flex", gap: 4, width: "100%", marginTop: 4 }}>
+                                        <button
+                                          onClick={() => onRentItem?.(item, "대여")}
+                                          disabled={item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)}
+                                          style={{
+                                            flex: 1,
+                                            background: "rgba(99, 102, 241, 0.08)",
+                                            border: `1px solid rgba(99, 102, 241, 0.3)`,
+                                            color: ACCENT,
+                                            borderRadius: "6px",
+                                            padding: "4px 6px",
+                                            fontSize: "11px",
+                                            fontWeight: 600,
+                                            cursor: (item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)) ? "not-allowed" : "pointer",
+                                            opacity: (item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)) ? 0.4 : 1,
+                                            transition: "background 0.15s",
+                                          }}
+                                        >
+                                          📦 대여
+                                        </button>
+                                        <button
+                                          onClick={() => onRentItem?.(item, "소모")}
+                                          disabled={item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)}
+                                          style={{
+                                            flex: 1,
+                                            background: "rgba(245, 158, 11, 0.08)",
+                                            border: `1px solid rgba(245, 158, 11, 0.3)`,
+                                            color: "#f59e0b",
+                                            borderRadius: "6px",
+                                            padding: "4px 6px",
+                                            fontSize: "11px",
+                                            fontWeight: 600,
+                                            cursor: (item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)) ? "not-allowed" : "pointer",
+                                            opacity: (item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)) ? 0.4 : 1,
+                                            transition: "background 0.15s",
+                                          }}
+                                        >
+                                          🔥 소모
+                                        </button>
+                                        <button
+                                          onClick={() => onRentItem?.(item, "반납")}
+                                          style={{
+                                            flex: 1,
+                                            background: "rgba(16, 185, 129, 0.08)",
+                                            border: `1px solid rgba(16, 185, 129, 0.3)`,
+                                            color: OK,
+                                            borderRadius: "6px",
+                                            padding: "4px 6px",
+                                            fontSize: "11px",
+                                            fontWeight: 600,
+                                            cursor: "pointer",
+                                            transition: "background 0.15s",
+                                          }}
+                                        >
+                                          🔄 반납
+                                        </button>
                                       </div>
                                     </div>
                                   ) : (
@@ -904,8 +966,8 @@ export default function SidePanel({
                                           최종수정: {item.updatedAt ? item.updatedAt.split(" ")[0] : "없음"}
                                         </span>
                                       </div>
-                                      {/* Borrow and Return buttons */}
-                                      <div style={{ display: "flex", gap: 6, width: "100%" }}>
+                                      {/* Borrow, Consume, and Return buttons */}
+                                      <div style={{ display: "flex", gap: 4, width: "100%" }}>
                                         <button
                                           onClick={() => onRentItem?.(item, "대여")}
                                           disabled={item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)}
@@ -915,18 +977,40 @@ export default function SidePanel({
                                             border: `1px solid ${ACCENT}`,
                                             color: ACCENT,
                                             borderRadius: "6px",
-                                            padding: "6px 8px",
-                                            fontSize: "11.5px",
+                                            padding: "6px 4px",
+                                            fontSize: "11px",
                                             fontWeight: 700,
                                             cursor: (item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)) ? "not-allowed" : "pointer",
                                             opacity: (item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)) ? 0.4 : 1,
                                             display: "flex",
                                             alignItems: "center",
                                             justifyContent: "center",
-                                            gap: 4,
+                                            gap: 3,
                                           }}
                                         >
-                                          📦 대여하기
+                                          📦 대여
+                                        </button>
+                                        <button
+                                          onClick={() => onRentItem?.(item, "소모")}
+                                          disabled={item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)}
+                                          style={{
+                                            flex: 1,
+                                            background: "rgba(245, 158, 11, 0.12)",
+                                            border: `1px solid #f59e0b`,
+                                            color: "#f59e0b",
+                                            borderRadius: "6px",
+                                            padding: "6px 4px",
+                                            fontSize: "11px",
+                                            fontWeight: 700,
+                                            cursor: (item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)) ? "not-allowed" : "pointer",
+                                            opacity: (item.stock === null || (typeof item.stock === "number" ? item.stock <= 0 : false)) ? 0.4 : 1,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            gap: 3,
+                                          }}
+                                        >
+                                          🔥 소모
                                         </button>
                                         <button
                                           onClick={() => onRentItem?.(item, "반납")}
@@ -936,17 +1020,17 @@ export default function SidePanel({
                                             border: `1px solid ${OK}`,
                                             color: OK,
                                             borderRadius: "6px",
-                                            padding: "6px 8px",
-                                            fontSize: "11.5px",
+                                            padding: "6px 4px",
+                                            fontSize: "11px",
                                             fontWeight: 700,
                                             cursor: "pointer",
                                             display: "flex",
                                             alignItems: "center",
                                             justifyContent: "center",
-                                            gap: 4,
+                                            gap: 3,
                                           }}
                                         >
-                                          🔄 반납하기
+                                          🔄 반납
                                         </button>
                                       </div>
                                     </div>
