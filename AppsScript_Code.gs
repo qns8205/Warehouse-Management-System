@@ -24,7 +24,7 @@ function doGet(e) {
     let defectSheet = ss.getSheetByName(DEFECT_SHEET_NAME);
     if (!defectSheet) {
       defectSheet = ss.insertSheet(DEFECT_SHEET_NAME);
-      defectSheet.getRange(1, 1, 1, 6).setValues([["제품명", "개수", "기록 시간", "불량 유형", "세부 사항", "대처 방안"]]);
+      defectSheet.getRange(1, 1, 1, 7).setValues([["제품명", "개수", "기록 시간", "불량 유형", "세부 사항", "대처 방안", "사진"]]);
     }
     
     // 대여로그 시트 가져오거나 없으면 자동 생성
@@ -40,13 +40,20 @@ function doGet(e) {
       const users = getUsersData(ss);
       const defectLogs = getDefectLogs(defectSheet);
       const rentLogs = getRentLogs(rentSheet);
+      let robotObjects = [];
+      try {
+        robotObjects = getRobotObjects(ss);
+      } catch (err) {
+        // '로봇 오브젝트' 시트가 없거나 오류 시 빈 배열
+      }
       return responseJSON({
         success: true,
         inventory: inventory,
         sectors: sectors,
         users: users,
         defectLogs: defectLogs,
-        rentLogs: rentLogs
+        rentLogs: rentLogs,
+        robotObjects: robotObjects
       });
     }
     
@@ -106,7 +113,7 @@ function doPost(e) {
       let defectSheet = ss.getSheetByName(DEFECT_SHEET_NAME);
       if (!defectSheet) {
         defectSheet = ss.insertSheet(DEFECT_SHEET_NAME);
-        defectSheet.getRange(1, 1, 1, 6).setValues([["제품명", "개수", "기록 시간", "불량 유형", "세부 사항", "대처 방안"]]);
+        defectSheet.getRange(1, 1, 1, 7).setValues([["제품명", "개수", "기록 시간", "불량 유형", "세부 사항", "대처 방안", "사진"]]);
       }
       const newRowIndex = addDefectLog(defectSheet, payload);
       return responseJSON({ success: true, rowIndex: newRowIndex });
@@ -163,6 +170,10 @@ function doPost(e) {
 }
 
 function getUsersData(ss) {
+  if (!ss) {
+    ss = SpreadsheetApp.getActiveSpreadsheet();
+  }
+  if (!ss) return [];
   let userSheet = ss.getSheetByName(USERS_SHEET_NAME);
   if (!userSheet) {
     // Users 시트가 없다면 기본 어드민 정보로 자동 생성해 줍니다.
@@ -279,13 +290,16 @@ function getDefectLogs(sheet) {
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return [];
   
-  const range = sheet.getRange(2, 1, lastRow - 1, 6);
+  const lastCol = Math.min(sheet.getLastColumn(), 7);
+  const range = sheet.getRange(2, 1, lastRow - 1, lastCol);
   const values = range.getValues();
   const displayValues = range.getDisplayValues();
   const logs = [];
   for (let i = 0; i < values.length; i++) {
     const row = values[i];
-    const rawTs = row[2] instanceof Date ? formatDate(row[2]) : (row[2] ? String(row[2]).trim() : (displayValues[i][2] || ""));
+    const rawTs = displayValues[i][2] ? String(displayValues[i][2]).trim() : (row[2] instanceof Date ? formatDate(row[2]) : String(row[2] || "").trim());
+    const photoUrl = lastCol >= 7 ? String(row[6] || "").trim() : "";
+    
     logs.push({
       rowIndex: i + 2,
       timestamp: rawTs.replace(/^'/, ""),
@@ -295,7 +309,8 @@ function getDefectLogs(sheet) {
       defectType: String(row[3] || "").trim(),
       manager: "",
       note: String(row[4] || "").trim(),
-      actionTaken: String(row[5] || "").trim()
+      actionTaken: String(row[5] || "").trim(),
+      photo: photoUrl
     });
   }
   return logs;
@@ -305,19 +320,149 @@ function addDefectLog(sheet, log) {
   const lastRow = sheet.getLastRow();
   const nextRow = lastRow + 1;
   
+  if (sheet.getLastColumn() < 7) {
+    sheet.getRange(1, 7).setValue("사진");
+  }
+  
+  // Use original log name exactly as-is (parentheses processing is removed)
+  let pName = String(log.name || "알수없음").trim();
+  
+  let photoVal = log.photo || "";
+  if (photoVal.indexOf("data:image/") === 0) {
+    try {
+      const parts = photoVal.split(",");
+      const mimeType = parts[0].split(";")[0].split(":")[1];
+      const base64Data = parts[1];
+      const decoded = Utilities.base64Decode(base64Data);
+      const ext = mimeType.split("/")[1] || "jpeg";
+      
+      // Determine folder
+      let folder;
+      try {
+        folder = DriveApp.getFolderById("1gs7NcJWgFY37OZ4aEuG6Z-PNlmAfz6_R");
+      } catch (fErr) {
+        const folders = DriveApp.getFoldersByName("Image for Broken Item");
+        if (folders.hasNext()) {
+          folder = folders.next();
+        } else {
+          folder = DriveApp.createFolder("Image for Broken Item");
+        }
+      }
+
+      // Rename file format: "제품명_기록 시간_불량 유형"
+      const pType = String(log.defectType || "기타불량").trim();
+      const rawTs = String(log.timestamp || formatDate(new Date())).replace(/'/g, "").trim();
+      const safeTs = rawTs.replace(/[:\/]/g, "-");
+      const filename = pName + "_" + safeTs + "_" + pType + "." + ext;
+
+      const blob = Utilities.newBlob(decoded, mimeType, filename);
+      const file = folder.createFile(blob);
+      
+      // Cascading setSharing: handles corporate security policies restricting public links
+      try {
+        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      } catch (shareErr) {
+        try {
+          file.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW);
+        } catch (domainShareErr) {
+          // Keep private to the owner if sharing is completely locked down
+        }
+      }
+      
+      photoVal = "https://lh3.googleusercontent.com/d/" + file.getId();
+    } catch (e) {
+      photoVal = "업로드 실패: 구글 드라이브 접근 권한이 필요합니다. Apps Script 에디터 우측 상단 '실행(Run)'을 1회 실행하여 권한 승인을 완료해 주세요. (상세 오류: " + e.toString() + ")";
+    }
+  }
+  
   const nowStr = formatDate(new Date());
   const ts = log.timestamp || nowStr;
   const rowValues = [
-    log.name || "",
+    pName,
     log.qty === "" || log.qty == null ? "" : Number(log.qty),
     ts.indexOf("'") === 0 ? ts : "'" + ts,
     log.defectType || "",
     log.note || "",
-    log.actionTaken || ""
+    log.actionTaken || "",
+    photoVal
   ];
   
-  sheet.getRange(nextRow, 1, 1, 6).setValues([rowValues]);
+  sheet.getRange(nextRow, 1, 1, 7).setValues([rowValues]);
   return nextRow;
+}
+
+function getRobotObjects(ss) {
+  if (!ss) {
+    ss = SpreadsheetApp.getActiveSpreadsheet();
+  }
+  if (!ss) return [];
+  const sheet = ss.getSheetByName("로봇 오브젝트");
+  if (!sheet) return [];
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+  
+  const lastCol = Math.max(sheet.getLastColumn(), 5);
+  const range = sheet.getRange(1, 1, lastRow, lastCol); // Row 1 onwards to read headers dynamically
+  const values = range.getValues();
+  
+  // Dynamic header parsing to identify the correct column index for each property
+  const headers = values[0].map(function(h) {
+    return String(h || "").trim().toLowerCase();
+  });
+  
+  var nameColIdx = -1;
+  var idColIdx = -1;
+  var locColIdx = -1;
+  var specColIdx = -1;
+  var noteColIdx = -1;
+  
+  for (var j = 0; j < headers.length; j++) {
+    var h = headers[j];
+    if (!h) continue;
+    // Look for name/품목명/제품명 column
+    if (h === "name" || h.indexOf("품목") !== -1 || h.indexOf("제품") !== -1 || h === "이름" || h === "오브젝트" || h === "명칭") {
+      nameColIdx = j;
+    } else if (h === "id" || h === "코드" || h === "번호" || h.indexOf("아이디") !== -1) {
+      idColIdx = j;
+    } else if (h.indexOf("위치") !== -1 || h.indexOf("구역") !== -1 || h.indexOf("장소") !== -1 || h.indexOf("location") !== -1) {
+      locColIdx = j;
+    } else if (h.indexOf("규격") !== -1 || h.indexOf("서브") !== -1 || h.indexOf("spec") !== -1) {
+      specColIdx = j;
+    } else if (h.indexOf("비고") !== -1 || h.indexOf("메모") !== -1 || h.indexOf("note") !== -1 || h.indexOf("설명") !== -1) {
+      noteColIdx = j;
+    }
+  }
+  
+  // Fallback default indices if header name did not match
+  if (nameColIdx === -1) {
+    nameColIdx = (idColIdx === 0) ? 1 : 0;
+  }
+  if (idColIdx === -1) {
+    idColIdx = (nameColIdx === 0) ? 1 : 0;
+  }
+  if (locColIdx === -1) locColIdx = 2;
+  if (specColIdx === -1) specColIdx = 3;
+  if (noteColIdx === -1) noteColIdx = 4;
+
+  const objects = [];
+  // Row indices are 1-based, starting with row 2 (index 1 of values array)
+  for (var i = 1; i < values.length; i++) {
+    const row = values[i];
+    const rawName = nameColIdx < row.length ? String(row[nameColIdx] || "").trim() : "";
+    const rawId = idColIdx < row.length ? String(row[idColIdx] || "").trim() : "";
+    if (!rawName && !rawId) continue;
+    
+    objects.push({
+      rowIndex: i + 1,
+      name: rawName || rawId, // fallback to ID if name is empty
+      id: rawId,
+      location: locColIdx < row.length ? String(row[locColIdx] || "로봇 구역").trim() : "로봇 구역",
+      spec: specColIdx < row.length ? String(row[specColIdx] || "").trim() : "",
+      note: noteColIdx < row.length ? String(row[noteColIdx] || "").trim() : "",
+      stock: "N/A"
+    });
+  }
+  return objects;
 }
 
 function getRentLogs(sheet) {
@@ -457,6 +602,20 @@ function formatDate(date) {
 function responseJSON(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+function testDrivePermission() {
+  try {
+    const folders = DriveApp.getFoldersByName("Image for Broken Item");
+    if (folders.hasNext()) {
+      Logger.log("성공: 구글 드라이브 권한이 정상 승인되었습니다! 기존 폴더를 감지했습니다.");
+    } else {
+      const folder = DriveApp.createFolder("Image for Broken Item");
+      Logger.log("성공: 구글 드라이브 권한이 정상 승인되었습니다! 새 폴더를 생성했습니다.");
+    }
+  } catch (e) {
+    Logger.log("실패: 권한 승인 중 오류가 발생했습니다. 에러: " + e.toString());
+  }
 }
 
 function serveExternalForm(ss, sheet) {
