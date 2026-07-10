@@ -17,6 +17,7 @@ import {
   Clock,
 } from "lucide-react";
 import { getGoogleDriveImageUrl, isFuzzyMatch, formatTimestampLocal } from "../utils/drive";
+import { parseDateString, compareDatesDescending } from "../utils/date";
 
 interface MobileViewPageProps {
   inventory: InventoryItem[];
@@ -131,14 +132,18 @@ export default function MobileViewPage({
       const existing = map.get(key);
       if (existing) {
         existing.qty += delta;
-        if ((log.timestamp || "") > existing.lastTimestamp) existing.lastTimestamp = log.timestamp || "";
+        const logTime = parseDateString(log.timestamp || "");
+        const existingTime = parseDateString(existing.lastTimestamp);
+        if (logTime > existingTime) {
+          existing.lastTimestamp = log.timestamp || "";
+        }
       } else {
         map.set(key, { key, name, location, user, qty: delta, lastTimestamp: log.timestamp || "" });
       }
     }
     return Array.from(map.values())
       .filter((o) => o.qty > 0)
-      .sort((a, b) => (b.lastTimestamp || "").localeCompare(a.lastTimestamp || ""));
+      .sort((a, b) => compareDatesDescending(a.lastTimestamp, b.lastTimestamp));
   }, [rentLogs]);
 
   const filteredOutstanding = useMemo(() => {

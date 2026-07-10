@@ -16,6 +16,7 @@ import {
   RotateCcw, 
   AlertCircle 
 } from "lucide-react";
+import { parseDateString } from "../utils/date";
 
 interface RentLogsPageProps {
   rentLogs: RentLog[];
@@ -146,9 +147,14 @@ export default function RentLogsPage({
 
     // Sort all rentLogs chronologically (oldest first)
     const chronoLogs = [...rentLogs].sort((a, b) => {
-      const timeA = a.timestamp || "";
-      const timeB = b.timestamp || "";
-      return timeA.localeCompare(timeB);
+      const timeA = parseDateString(a.timestamp || "");
+      const timeB = parseDateString(b.timestamp || "");
+      if (timeA !== timeB) {
+        return timeA - timeB; // Oldest timestamp first
+      }
+      const rowA = a.rowIndex || 0;
+      const rowB = b.rowIndex || 0;
+      return rowA - rowB; // Lower row index (older) first
     });
 
     const outstanding: { [key: string]: Array<{ timestamp: string; qty: number; remainingQty: number }> } = {};
@@ -402,9 +408,14 @@ export default function RentLogsPage({
 
     // Sort by timestamp descending (newest first)
     return [...filtered].sort((a, b) => {
-      const timeA = a.timestamp || "";
-      const timeB = b.timestamp || "";
-      return timeB.localeCompare(timeA);
+      const timeA = parseDateString(a.timestamp || "");
+      const timeB = parseDateString(b.timestamp || "");
+      if (timeA !== timeB) {
+        return timeB - timeA; // Newer timestamp first
+      }
+      const rowA = a.rowIndex || 0;
+      const rowB = b.rowIndex || 0;
+      return rowB - rowA; // Higher row index (newer) first
     });
   }, [rentLogs, filterQuery, filterType]);
 

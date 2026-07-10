@@ -3,6 +3,7 @@ import { InventoryItem, DefectLog } from "../types";
 import { AlertTriangle, Calendar, User, MapPin, Clipboard, Plus, Search, ArrowLeft, FileText, Check, Camera, Upload, X, ImageIcon } from "lucide-react";
 
 import { isFuzzyMatch } from "../utils/drive";
+import { parseDateString } from "../utils/date";
 
 interface DefectLogsPageProps {
   defectLogs: DefectLog[];
@@ -325,10 +326,17 @@ export default function DefectLogsPage({
         return matchesQuery && matchesType;
       })
       .sort((a, b) => {
-        // timestamp가 비어있을 수 있으므로, 비어있는 경우를 대응해 정렬
-        const timeA = a.timestamp || "";
-        const timeB = b.timestamp || "";
-        return timeB.localeCompare(timeA);
+        const timeA = parseDateString(a.timestamp || "");
+        const timeB = parseDateString(b.timestamp || "");
+        
+        if (timeA !== timeB) {
+          return timeB - timeA; // Newer timestamp first
+        }
+        
+        // Fallback to rowIndex if timestamps are identical or cannot be parsed
+        const rowA = a.rowIndex || 0;
+        const rowB = b.rowIndex || 0;
+        return rowB - rowA; // Higher row index (newer) first
       }); // Latest first
   }, [defectLogs, filterQuery, filterType]);
 
