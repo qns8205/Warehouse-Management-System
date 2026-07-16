@@ -203,7 +203,8 @@ export default function RentalPage({
     e.preventDefault();
 
     if (!rentUser.trim()) {
-      showToast("대여/반납 담당자 이름을 입력해 주세요.", "warn");
+      const roleName = actionType === "대여" ? "대여자" : actionType === "반납" ? "반납자" : "소모자";
+      showToast(`${roleName} 이름을 입력해 주세요.`, "warn");
       return;
     }
     if (cart.length === 0) {
@@ -437,10 +438,10 @@ export default function RentalPage({
               </div>
             </div>
 
-            {/* 대여자 담당자 이름 */}
+            {/* 대여자 / 반납자 / 소모자 이름 */}
             <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
               <label style={{ fontSize: "11px", fontWeight: 700, color: isLightMode ? "#475569" : "#94a3b8" }}>
-                대여/반납 담당자 <span style={{ color: "#ef4444" }}>*</span>
+                {actionType === "대여" ? "대여자" : actionType === "반납" ? "반납자" : "소모자"} <span style={{ color: "#ef4444" }}>*</span>
               </label>
               <div style={{ position: "relative" }}>
                 <User size={16} style={{ position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)", color: isLightMode ? "#94a3b8" : "#64748b" }} />

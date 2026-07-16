@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { InventoryItem, Rack } from "../types";
 import { parseLocation } from "../utils/drive";
+import { Upload, X, Camera, ImageIcon } from "lucide-react";
 
 interface ItemFormModalProps {
   item: InventoryItem | null;
@@ -63,6 +64,38 @@ export default function ItemFormModal({
   const [shelfMode, setShelfMode] = useState<"existing" | "new">("existing");
   const [shelfPick, setShelfPick] = useState(initialShelfPick);
   const [newShelfNum, setNewShelfNum] = useState(initialNewShelfNum);
+
+  // Image Uploading States & Utilities
+  const [isDragging, setIsDragging] = useState(false);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+
+  const readAsBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = (err) => reject(err);
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const processAndUploadFile = async (file: File) => {
+    try {
+      setIsUploadingImage(true);
+      const rawBase64 = await readAsBase64(file);
+      update("photo", rawBase64);
+    } catch (err: any) {
+      console.error("Image processing error:", err);
+      alert(`이미지 처리 실패: ${err.message || err}`);
+    } finally {
+      setIsUploadingImage(false);
+    }
+  };
+
+  const handlePhotoFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await processAndUploadFile(file);
+  };
 
   const currentRack = racks.find((r) => r.id === rackId);
   const existingShelves = currentRack && currentRack.shelves ? currentRack.shelves : [];
@@ -398,15 +431,102 @@ export default function ItemFormModal({
             </Field>
           </div>
 
-          <Field label="사진 링크 (구글 드라이브 주소 또는 일반 이미지 URL)">
+          <Field label="사진 등록 (구글 드라이브 주소 또는 이미지 파일 직접 업로드)">
             <input
-              value={form.photo}
+              value={form.photo && form.photo.startsWith("data:image/") ? "" : form.photo}
+              disabled={!!(form.photo && form.photo.startsWith("data:image/"))}
               onChange={(e) => update("photo", e.target.value)}
-              placeholder="구글 드라이브 공유 링크나 이미지 URL 주소를 입력하세요"
-              style={{ width: "100%" }}
+              placeholder={form.photo && form.photo.startsWith("data:image/") ? "파일이 업로드되었습니다" : "구글 드라이브 공유 링크나 이미지 URL 주소를 입력하세요"}
+              style={{ width: "100%", opacity: form.photo && form.photo.startsWith("data:image/") ? 0.6 : 1 }}
             />
+            
+            <div
+              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={async (e) => {
+                e.preventDefault();
+                setIsDragging(false);
+                const file = e.dataTransfer.files?.[0];
+                if (file && file.type.startsWith("image/")) {
+                  await processAndUploadFile(file);
+                }
+              }}
+              style={{
+                border: `1px dashed ${isDragging ? "#6366f1" : PANEL_BORDER}`,
+                background: isDragging ? "rgba(99, 102, 241, 0.05)" : "rgba(255, 255, 255, 0.02)",
+                borderRadius: 8,
+                padding: "14px",
+                textAlign: "center",
+                cursor: "pointer",
+                marginTop: 8,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 6
+              }}
+              onClick={() => document.getElementById("pc-item-photo-upload")?.click()}
+            >
+              <input
+                type="file"
+                id="pc-item-photo-upload"
+                accept="image/*"
+                style={{ display: "none" }}
+                onChange={handlePhotoFileChange}
+              />
+              {form.photo && form.photo.startsWith("data:image/") ? (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, width: "100%" }}>
+                  <img
+                    src={form.photo}
+                    alt="Preview"
+                    style={{ width: 40, height: 40, borderRadius: 6, objectFit: "cover" }}
+                  />
+                  <div style={{ textAlign: "left" }}>
+                    <span style={{ fontSize: 11, fontWeight: "bold", color: "#6366f1", display: "block" }}>
+                      📸 이미지 직접 등록 준비 완료
+                    </span>
+                    <span style={{ fontSize: 9.5, color: TEXT_DIM, display: "block" }}>
+                      저장 시 클라우드 드라이브에 자동 업로드됩니다.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      update("photo", "");
+                    }}
+                    style={{
+                      background: "rgba(239, 68, 68, 0.15)",
+                      color: "#f43f5e",
+                      border: "none",
+                      borderRadius: 4,
+                      padding: "2px 6px",
+                      fontSize: 10,
+                      cursor: "pointer",
+                      fontWeight: "bold",
+                      marginLeft: "auto"
+                    }}
+                  >
+                    삭제
+                  </button>
+                </div>
+              ) : isUploadingImage ? (
+                <span style={{ fontSize: 11, color: TEXT_DIM }}>이미지 변환 및 등록 대기 중...</span>
+              ) : (
+                <>
+                  <Upload size={16} color={isDragging ? "#6366f1" : TEXT_DIM} />
+                  <span style={{ fontSize: 11.5, color: TEXT_MAIN, fontWeight: 500 }}>
+                    클릭하거나 이미지 파일을 여기로 드래그하여 직접 업로드
+                  </span>
+                  <span style={{ fontSize: 9.5, color: TEXT_DIM }}>
+                    (선택한 이미지는 구글 드라이브 지정 폴더에 자동 업로드되어 안전하게 관리됩니다)
+                  </span>
+                </>
+              )}
+            </div>
+            
             <span style={{ fontSize: 10, color: TEXT_DIM, marginTop: 4, display: "block" }}>
-              * 구글 드라이브 사진의 공유 범위를 '링크가 있는 모든 사용자'로 설정하여 붙여넣으시면 실시간 사진 연동이 작동합니다.
+              * 드라이브 공유 링크를 직접 입력하거나, 이미지 파일을 직접 업로드해 오브젝트 이름으로 관리할 수 있습니다.
             </span>
           </Field>
 

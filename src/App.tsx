@@ -279,19 +279,9 @@ export default function App() {
     setTimeout(() => setToast(null), 2800);
   };
 
-  // 3-1. 관리자 모드는 PC/태블릿에서만 허용 (모바일 화면으로 전환/축소되면 즉시 열람용 모드로 강등)
+  // 3-1. 모바일용 관리자 모드 시스템 활성화 지원
   useEffect(() => {
-    if (isMobile && isAdmin) {
-      setIsAdmin(false);
-      localStorage.setItem("wms_is_admin", "false");
-      setCurrentUser(null);
-      localStorage.removeItem("wms_current_user");
-      if (currentView === "monitor" || currentView === "defect" || currentView === "rent") {
-        setCurrentView("monitor");
-      }
-      showToast("관리자 모드는 PC/태블릿 환경에서만 이용할 수 있어 열람용 모드로 전환되었습니다.", "warn");
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // 모바일에서도 관리자 모드를 정식 지원하므로 자동 강등 처리 제거
   }, [isMobile]);
 
   // 3-2. 검색결과 외부 클릭 감지하여 닫기 및 화면 전환 시 자동 닫기
@@ -1362,16 +1352,16 @@ export default function App() {
       <LoginPage
         users={users}
         onLoginSuccess={(user) => {
-          if (isMobile) {
-            showToast("관리자 모드는 PC 또는 태블릿 환경에서만 접속할 수 있습니다.", "error");
-            return;
-          }
           setCurrentUser(user);
           localStorage.setItem("wms_current_user", JSON.stringify(user));
           setIsAdmin(true);
           localStorage.setItem("wms_is_admin", "true");
           setCurrentView("monitor");
-          showToast(`${user.name || user.id} 관리자님, 환영합니다!`, "ok");
+          if (isMobile) {
+            showToast(`📱 모바일 관리자(${user.name || user.id}) 로그인 성공!`, "ok");
+          } else {
+            showToast(`${user.name || user.id} 관리자님, 환영합니다!`, "ok");
+          }
         }}
         onViewOnlyMode={() => {
           setIsAdmin(false);
@@ -1405,15 +1395,19 @@ export default function App() {
     );
   }
 
-  // 모바일 + 열람용 모드(비관리자)인 경우, PC 화면을 축소한 형태가 아닌
-  // 검색 / 사진확인 / 대여·반납에 집중한 전용 모바일 UI를 노출한다.
-  // (불량로그, 랙 위치도 등 관리자용 화면은 모바일 열람용 모드에서 제외)
-  if (currentView === "monitor" && !isAdmin && isMobile) {
+  // 모바일인 경우, PC 화면을 축소한 형태가 아닌
+  // 검색 / 사진확인 / 대여·반납 / 등록 / 불량제품에 집중한 전용 모바일 UI를 노출한다.
+  if (currentView === "monitor" && isMobile) {
     return (
       <MobileViewPage
         inventory={inventory}
         rentLogs={rentLogs}
+        defectLogs={defectLogs}
+        racks={racks}
+        isAdmin={isAdmin}
         onAddRentLog={handleAddRentLog}
+        onAddDefectLog={handleAddDefectLog}
+        onSaveInventoryItem={saveInventoryItem}
         onBack={() => {
           setIsAdmin(false);
           localStorage.setItem("wms_is_admin", "false");
@@ -2665,7 +2659,7 @@ export default function App() {
               {/* 대여/반납/소모자 입력 */}
               <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                 <label style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-main, #f1f5f9)" }}>
-                  {modalActionType === "대여" ? "대여 담당자 이름" : modalActionType === "소모" ? "소모 담당자 이름" : "반납자 이름"} <span style={{ color: "#f43f5e" }}>*</span>
+                  {modalActionType === "대여" ? "대여자 이름" : modalActionType === "소모" ? "소모자 이름" : "반납자 이름"} <span style={{ color: "#f43f5e" }}>*</span>
                 </label>
                 <input
                   type="text"
@@ -2755,7 +2749,8 @@ export default function App() {
               <button
                 onClick={() => {
                   if (!rentUserName.trim()) {
-                    showToast("담당자 이름을 입력해주세요.", "warn");
+                    const roleName = modalActionType === "대여" ? "대여자" : modalActionType === "소모" ? "소모자" : "반납자";
+                    showToast(`${roleName} 이름을 입력해주세요.`, "warn");
                     return;
                   }
                   if ((modalActionType === "대여" || modalActionType === "소모") && typeof showRentModal.item.stock === "number" && rentQty > showRentModal.item.stock) {

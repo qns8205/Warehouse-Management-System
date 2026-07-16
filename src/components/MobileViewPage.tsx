@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
-import { InventoryItem, RentLog } from "../types";
+import { InventoryItem, RentLog, DefectLog, Rack } from "../types";
 import {
   ArrowLeft,
   Search,
@@ -15,6 +15,10 @@ import {
   ImageOff,
   User,
   Clock,
+  AlertTriangle,
+  ClipboardList,
+  Camera,
+  Upload,
 } from "lucide-react";
 import { getGoogleDriveImageUrl, isFuzzyMatch, formatTimestampLocal } from "../utils/drive";
 import { parseDateString, compareDatesDescending } from "../utils/date";
@@ -22,15 +26,20 @@ import { parseDateString, compareDatesDescending } from "../utils/date";
 interface MobileViewPageProps {
   inventory: InventoryItem[];
   rentLogs: RentLog[];
+  defectLogs?: DefectLog[];
+  racks?: Rack[];
+  isAdmin?: boolean;
   onAddRentLog: (log: RentLog) => Promise<void>;
+  onAddDefectLog?: (log: Omit<DefectLog, "rowIndex">) => Promise<void>;
+  onSaveInventoryItem?: (item: Omit<InventoryItem, "rowIndex"> & { rowIndex?: number }) => Promise<void>;
   onBack: () => void;
   isLightMode: boolean;
   toggleLightMode: () => void;
   connected: boolean;
 }
 
-type Mode = "대여" | "반납";
-type SheetMode = "detail" | "form" | null;
+type Mode = "대여" | "반납" | "등록" | "불량";
+type SheetMode = "detail" | "form" | "edit-inventory" | null;
 
 interface OutstandingRental {
   key: string;
@@ -51,7 +60,12 @@ interface OutstandingRental {
 export default function MobileViewPage({
   inventory,
   rentLogs,
+  defectLogs = [],
+  racks = [],
+  isAdmin = false,
   onAddRentLog,
+  onAddDefectLog,
+  onSaveInventoryItem,
   onBack,
   isLightMode,
   toggleLightMode,
@@ -64,10 +78,86 @@ export default function MobileViewPage({
   const [outstandingContext, setOutstandingContext] = useState<OutstandingRental | null>(null);
   const [sheetMode, setSheetMode] = useState<SheetMode>(null);
 
+  // 대여 / 반납 일반 폼 상태
   const [formUser, setFormUser] = useState("");
   const [formQty, setFormQty] = useState(1);
   const [formNote, setFormNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  // --- 모바일 품목 등록(등록 탭) 폼 상태 ---
+  const [regName, setRegName] = useState("");
+  const [regRackId, setRegRackId] = useState(racks[0]?.id || "");
+  const [regShelf, setRegShelf] = useState("");
+  const [regCustomLocation, setRegCustomLocation] = useState("");
+  const [regIsCustomLoc, setRegIsCustomLoc] = useState(false);
+  const [regSpec, setRegSpec] = useState("");
+  const [regStock, setRegStock] = useState<string>("0");
+  const [regManager, setRegManager] = useState("관리자");
+  const [regNote, setRegNote] = useState("");
+  const [regPhoto, setRegPhoto] = useState("");
+  const [regLink, setRegLink] = useState("N/A");
+  const [regSubmitting, setRegSubmitting] = useState(false);
+
+  // --- 모바일 불량(불량 탭) 폼 상태 ---
+  const [defectTab, setDefectTab] = useState<"list" | "register">("list");
+  const [defSelectedInvIndex, setDefSelectedInvIndex] = useState<number>(-1); // -1: 직접 입력
+  const [defCustomName, setDefCustomName] = useState("");
+  const [defCustomLoc, setDefCustomLoc] = useState("");
+  const [defQty, setDefQty] = useState(1);
+  const [defType, setDefType] = useState("파손");
+  const [defManager, setDefManager] = useState("관리자");
+  const [defNote, setDefNote] = useState("");
+  const [defActionTaken, setDefActionTaken] = useState("폐기 대기");
+  const [defPhoto, setDefPhoto] = useState("");
+  const [defectSubmitting, setDefectSubmitting] = useState(false);
+
+  // --- 이미지 업로드 상태 및 헬퍼 ---
+  const [isRegUploadingImage, setIsRegUploadingImage] = useState(false);
+  const [isDefUploadingImage, setIsDefUploadingImage] = useState(false);
+
+  const readAsBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = (err) => reject(err);
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleRegPhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setIsRegUploadingImage(true);
+      const base64 = await readAsBase64(file);
+      setRegPhoto(base64);
+    } catch (err: any) {
+      notify("이미지 로드 실패: " + err.message, "error");
+    } finally {
+      setIsRegUploadingImage(false);
+    }
+  };
+
+  const handleDefPhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setIsDefUploadingImage(true);
+      const base64 = await readAsBase64(file);
+      setDefPhoto(base64);
+    } catch (err: any) {
+      notify("이미지 로드 실패: " + err.message, "error");
+    } finally {
+      setIsDefUploadingImage(false);
+    }
+  };
+
+  // --- 인라인 품목 수정(edit-inventory) 폼 상태 (Admin 전용) ---
+  const [editStock, setEditStock] = useState<string>("0");
+  const [editSpec, setEditSpec] = useState("");
+  const [editNote, setEditNote] = useState("");
+  const [editManager, setEditManager] = useState("관리자");
+  const [editSubmitting, setEditSubmitting] = useState(false);
 
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [localToast, setLocalToast] = useState<{ msg: string; type: "ok" | "error" | "warn" } | null>(null);
@@ -100,8 +190,8 @@ export default function MobileViewPage({
   const TEXT_MAIN = isLightMode ? "#0f172a" : "#f1f5f9";
   const TEXT_DIM = isLightMode ? "#64748b" : "#94a3b8";
   const INPUT_BG = isLightMode ? "#f8fafc" : "#0f172a";
-  const MODE_COLOR = mode === "대여" ? ACCENT : GREEN;
-  const MODE_COLOR_LIGHT = mode === "대여" ? ACCENT_LIGHT : GREEN_LIGHT;
+  const MODE_COLOR = mode === "대여" ? ACCENT : mode === "반납" ? GREEN : mode === "등록" ? "#6366f1" : AMBER;
+  const MODE_COLOR_LIGHT = mode === "대여" ? ACCENT_LIGHT : mode === "반납" ? GREEN_LIGHT : mode === "등록" ? "#818cf8" : "#fbbf24";
 
   // ---------- 대여 가능 여부: 숫자 재고가 0 이하일 때만 차단, N/A(문자/없음)는 항상 대여 가능 ----------
   const isRentDisabled = (item: InventoryItem) =>
@@ -117,6 +207,19 @@ export default function MobileViewPage({
         (item.spec && isFuzzyMatch(item.spec, searchQuery))
     );
   }, [inventory, searchQuery]);
+
+  // ---------- 불량 탭: 불량 로그 검색 ----------
+  const filteredDefectLogs = useMemo(() => {
+    if (!searchQuery.trim()) return defectLogs;
+    return defectLogs.filter(
+      (log) =>
+        isFuzzyMatch(log.name || "", searchQuery) ||
+        isFuzzyMatch(log.defectType || "", searchQuery) ||
+        isFuzzyMatch(log.note || "", searchQuery) ||
+        isFuzzyMatch(log.actionTaken || "", searchQuery) ||
+        isFuzzyMatch(log.manager || "", searchQuery)
+    );
+  }, [defectLogs, searchQuery]);
 
   // ---------- 반납 탭: 아직 반납되지 않은(미반납) 대여 내역 집계 ----------
   const outstandingRentals = useMemo(() => {
@@ -266,6 +369,174 @@ export default function MobileViewPage({
     }
   };
 
+  // 1. 신규 품목 등록 (등록 탭) 제출 처리
+  const handleRegisterItemSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!regName.trim()) {
+      notify("품목명을 입력해 주세요.", "warn");
+      return;
+    }
+    const location = regIsCustomLoc
+      ? regCustomLocation.trim()
+      : `${regRackId}-${regShelf.trim()}`;
+    if (!location) {
+      notify("위치를 지정하거나 직접 입력해 주세요.", "warn");
+      return;
+    }
+
+    setRegSubmitting(true);
+    try {
+      let numericStock: number | string | null = null;
+      if (regStock.trim().toUpperCase() === "N/A") {
+        numericStock = "N/A";
+      } else {
+        const val = Number(regStock);
+        numericStock = isNaN(val) ? regStock : val;
+      }
+
+      const item: Omit<InventoryItem, "rowIndex"> = {
+        name: regName.trim(),
+        location: location,
+        spec: regSpec.trim(),
+        stock: numericStock,
+        manager: regManager.trim(),
+        note: regNote.trim(),
+        photo: regPhoto.trim(),
+        link: regLink.trim() || "N/A",
+        updatedAt: formatTimestampLocal(),
+      };
+
+      if (onSaveInventoryItem) {
+        await onSaveInventoryItem(item);
+        notify(`${regName} 품목이 성공적으로 등록되었습니다.`, "ok");
+        // Reset form
+        setRegName("");
+        setRegShelf("");
+        setRegCustomLocation("");
+        setRegSpec("");
+        setRegStock("0");
+        setRegNote("");
+        setRegPhoto("");
+        setRegLink("N/A");
+      } else {
+        notify("품목 등록 처리 핸들러가 연결되지 않았습니다.", "error");
+      }
+    } catch (err: any) {
+      notify("등록 중 오류가 발생했습니다: " + (err?.message || "알 수 없는 오류"), "error");
+    } finally {
+      setRegSubmitting(false);
+    }
+  };
+
+  // 2. 불량 접수 (불량 탭) 제출 처리
+  const handleRegisterDefectSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    let itemName = "";
+    let itemLocation = "";
+
+    if (defSelectedInvIndex === -1) {
+      if (!defCustomName.trim()) {
+        notify("품목명을 입력해 주세요.", "warn");
+        return;
+      }
+      if (!defCustomLoc.trim()) {
+        notify("보관 위치를 입력해 주세요.", "warn");
+        return;
+      }
+      itemName = defCustomName.trim();
+      itemLocation = defCustomLoc.trim();
+    } else {
+      const selectedInv = inventory[defSelectedInvIndex];
+      if (!selectedInv) {
+        notify("선택된 품목이 올바르지 않습니다.", "warn");
+        return;
+      }
+      itemName = selectedInv.name;
+      itemLocation = selectedInv.location;
+    }
+
+    setDefectSubmitting(true);
+    try {
+      const log: Omit<DefectLog, "rowIndex"> = {
+        timestamp: formatTimestampLocal(),
+        location: itemLocation,
+        name: itemName,
+        qty: defQty,
+        defectType: defType,
+        manager: defManager.trim() || "관리자",
+        note: defNote.trim(),
+        actionTaken: defActionTaken.trim() || "조치 예정",
+        photo: defPhoto,
+      };
+
+      if (onAddDefectLog) {
+        await onAddDefectLog(log);
+        notify(`불량 접수 완료: ${itemName} (${defQty}개)`, "ok");
+        // Reset form
+        setDefCustomName("");
+        setDefCustomLoc("");
+        setDefQty(1);
+        setDefNote("");
+        setDefPhoto(""); // Reset photo state
+        setDefectTab("list"); // Go back to list!
+      } else {
+        notify("불량 등록 처리 핸들러가 연결되지 않았습니다.", "error");
+      }
+    } catch (err: any) {
+      notify("등록 중 오류가 발생했습니다: " + (err?.message || "알 수 없는 오류"), "error");
+    } finally {
+      setDefectSubmitting(false);
+    }
+  };
+
+  // 3. 인라인 품목 재고/정보 수정 (Admin 전용) 제출 처리
+  const handleEditInventorySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedItem) return;
+
+    setEditSubmitting(true);
+    try {
+      let numericStock: number | string | null = null;
+      if (editStock.trim().toUpperCase() === "N/A") {
+        numericStock = "N/A";
+      } else {
+        const val = Number(editStock);
+        numericStock = isNaN(val) ? editStock : val;
+      }
+
+      const updatedItem: Omit<InventoryItem, "rowIndex"> & { rowIndex?: number } = {
+        ...selectedItem,
+        stock: numericStock,
+        spec: editSpec.trim(),
+        note: editNote.trim(),
+        manager: editManager.trim(),
+        updatedAt: formatTimestampLocal(),
+      };
+
+      if (onSaveInventoryItem) {
+        await onSaveInventoryItem(updatedItem);
+        notify(`${selectedItem.name} 정보가 성공적으로 수정되었습니다.`, "ok");
+        closeSheet();
+      } else {
+        notify("수정 처리 핸들러가 연결되지 않았습니다.", "error");
+      }
+    } catch (err: any) {
+      notify("수정 중 오류가 발생했습니다: " + (err?.message || "알 수 없는 오류"), "error");
+    } finally {
+      setEditSubmitting(false);
+    }
+  };
+
+  // 4. 인라인 수정 활성화할 때 상태 세팅
+  const openEditInventory = () => {
+    if (!selectedItem) return;
+    setEditStock(selectedItem.stock === null ? "" : String(selectedItem.stock));
+    setEditSpec(selectedItem.spec || "");
+    setEditNote(selectedItem.note || "");
+    setEditManager(selectedItem.manager || "관리자");
+    setSheetMode("edit-inventory");
+  };
+
   const inputBaseStyle: React.CSSProperties = {
     width: "100%",
     background: INPUT_BG,
@@ -336,7 +607,7 @@ export default function MobileViewPage({
           </button>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: "15px", fontWeight: 800, color: TEXT_MAIN, whiteSpace: "nowrap" }}>
-              👀 열람용 모드
+              {isAdmin ? "📱 모바일 관리자" : "👀 열람용 모드"}
             </div>
             <div
               style={{
@@ -395,28 +666,28 @@ export default function MobileViewPage({
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: "8px",
+            gridTemplateColumns: isAdmin ? "1fr 1fr 1fr 1fr" : "1fr 1fr",
+            gap: "6px",
             background: isLightMode ? "#f1f5f9" : "#111827",
             padding: "4px",
             borderRadius: "14px",
-            marginBottom: "10px",
+            marginBottom: (mode === "등록" || mode === "불량") ? "0px" : "10px",
           }}
         >
           <button
             className="mvp-btn"
             onClick={() => switchMode("대여")}
             style={{
-              padding: "13px",
+              padding: isAdmin ? "10px 4px" : "13px",
               borderRadius: "11px",
-              fontSize: "14.5px",
+              fontSize: isAdmin ? "12px" : "14.5px",
               fontWeight: 800,
               background: mode === "대여" ? ACCENT : "transparent",
               color: mode === "대여" ? "#ffffff" : TEXT_DIM,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              gap: "6px",
+              gap: "4px",
               boxShadow: mode === "대여" ? "0 6px 14px rgba(79,70,229,0.3)" : "none",
             }}
           >
@@ -426,16 +697,16 @@ export default function MobileViewPage({
             className="mvp-btn"
             onClick={() => switchMode("반납")}
             style={{
-              padding: "13px",
+              padding: isAdmin ? "10px 4px" : "13px",
               borderRadius: "11px",
-              fontSize: "14.5px",
+              fontSize: isAdmin ? "12px" : "14.5px",
               fontWeight: 800,
               background: mode === "반납" ? GREEN : "transparent",
               color: mode === "반납" ? "#ffffff" : TEXT_DIM,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              gap: "6px",
+              gap: "4px",
               boxShadow: mode === "반납" ? "0 6px 14px rgba(16,185,129,0.3)" : "none",
             }}
           >
@@ -445,70 +716,122 @@ export default function MobileViewPage({
                 style={{
                   background: mode === "반납" ? "rgba(255,255,255,0.25)" : DANGER,
                   color: "#ffffff",
-                  fontSize: "10.5px",
+                  fontSize: "9px",
                   fontWeight: 800,
                   borderRadius: "999px",
-                  padding: "1px 7px",
+                  padding: "1px 5px",
                 }}
               >
                 {outstandingRentals.length}
               </span>
             )}
           </button>
-        </div>
-
-        <div style={{ position: "relative" }}>
-          <Search
-            size={16}
-            style={{ position: "absolute", left: "14px", top: "50%", transform: "translateY(-50%)", color: TEXT_DIM }}
-          />
-          <input
-            className="mvp-input"
-            type="text"
-            inputMode="search"
-            placeholder={mode === "대여" ? "품목명, 위치, 규격으로 검색" : "품목명, 위치, 대여자 이름으로 검색"}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            style={{
-              width: "100%",
-              background: CARD_BG,
-              border: `1px solid ${BORDER}`,
-              borderRadius: "12px",
-              padding: "12px 14px 12px 38px",
-              color: TEXT_MAIN,
-              fontSize: "14px",
-              outline: "none",
-            }}
-          />
-          {searchQuery && (
-            <button
-              className="mvp-btn"
-              onClick={() => setSearchQuery("")}
-              style={{
-                position: "absolute",
-                right: "10px",
-                top: "50%",
-                transform: "translateY(-50%)",
-                background: "transparent",
-                color: TEXT_DIM,
-                width: "24px",
-                height: "24px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <X size={15} />
-            </button>
+          {isAdmin && (
+            <>
+              <button
+                className="mvp-btn"
+                onClick={() => switchMode("등록")}
+                style={{
+                  padding: "10px 4px",
+                  borderRadius: "11px",
+                  fontSize: "12px",
+                  fontWeight: 800,
+                  background: mode === "등록" ? "#6366f1" : "transparent",
+                  color: mode === "등록" ? "#ffffff" : TEXT_DIM,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "4px",
+                  boxShadow: mode === "등록" ? "0 6px 14px rgba(99,102,241,0.3)" : "none",
+                }}
+              >
+                📦 등록
+              </button>
+              <button
+                className="mvp-btn"
+                onClick={() => switchMode("불량")}
+                style={{
+                  padding: "10px 4px",
+                  borderRadius: "11px",
+                  fontSize: "12px",
+                  fontWeight: 800,
+                  background: mode === "불량" ? AMBER : "transparent",
+                  color: mode === "불량" ? "#ffffff" : TEXT_DIM,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "4px",
+                  boxShadow: mode === "불량" ? "0 6px 14px rgba(245,158,11,0.3)" : "none",
+                }}
+              >
+                ⚠️ 불량
+              </button>
+            </>
           )}
         </div>
-        <div style={{ fontSize: "11px", color: TEXT_DIM, marginTop: "8px", fontWeight: 600 }}>
-          {mode === "대여" ? `총 ${filteredInventory.length}개 품목` : `미반납 ${filteredOutstanding.length}건`}
-        </div>
+
+        {!(mode === "등록" || (mode === "불량" && defectTab === "register")) && (
+          <>
+            <div style={{ position: "relative" }}>
+              <Search
+                size={16}
+                style={{ position: "absolute", left: "14px", top: "50%", transform: "translateY(-50%)", color: TEXT_DIM }}
+              />
+              <input
+                className="mvp-input"
+                type="text"
+                inputMode="search"
+                placeholder={
+                  mode === "대여"
+                    ? "품목명, 위치, 규격으로 검색"
+                    : mode === "반납"
+                    ? "품목명, 위치, 대여자 이름으로 검색"
+                    : "제품명, 불량 유형, 상세 내용으로 검색"
+                }
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                style={{
+                  width: "100%",
+                  background: CARD_BG,
+                  border: `1px solid ${BORDER}`,
+                  borderRadius: "12px",
+                  padding: "12px 14px 12px 38px",
+                  color: TEXT_MAIN,
+                  fontSize: "14px",
+                  outline: "none",
+                }}
+              />
+              {searchQuery && (
+                <button
+                  className="mvp-btn"
+                  onClick={() => setSearchQuery("")}
+                  style={{
+                    position: "absolute",
+                    right: "10px",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    background: "transparent",
+                    color: TEXT_DIM,
+                    width: "24px",
+                    height: "24px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <X size={15} />
+                </button>
+              )}
+            </div>
+            <div style={{ fontSize: "11px", color: TEXT_DIM, marginTop: "8px", fontWeight: 600 }}>
+              {mode === "대여" ? `총 ${filteredInventory.length}개 품목` : `미반납 ${filteredOutstanding.length}건`}
+            </div>
+          </>
+        )}
       </div>
 
-      {/* ===== 리스트 ===== */}
-      <main style={{ flex: 1, padding: "10px 14px 24px", display: "flex", flexDirection: "column", gap: "10px" }}>
+      {/* ===== 리스트 & 폼 메인 영역 ===== */}
+      <main style={{ flex: 1, padding: "14px 14px 32px", display: "flex", flexDirection: "column", gap: "10px", overflowY: "auto" }}>
         {mode === "대여" ? (
           filteredInventory.length === 0 ? (
             <div style={{ marginTop: "40px", textAlign: "center", color: TEXT_DIM, fontSize: "13px" }}>
@@ -628,104 +951,820 @@ export default function MobileViewPage({
               );
             })
           )
-        ) : filteredOutstanding.length === 0 ? (
-          <div style={{ marginTop: "40px", textAlign: "center", color: TEXT_DIM, fontSize: "13px" }}>
-            <Check size={36} style={{ margin: "0 auto 10px", opacity: 0.4 }} />
-            {searchQuery ? "검색 결과가 없습니다." : "현재 반납할 물품이 없습니다."}
-          </div>
-        ) : (
-          filteredOutstanding.map((o) => {
-            const matched = inventory.find(
-              (inv) => (inv.name || "").trim() === o.name && (inv.location || "").trim() === o.location
-            );
-            const hasImage = !!matched?.photo;
-            const imageUrl = hasImage ? getGoogleDriveImageUrl(matched!.photo) : "";
+        ) : mode === "반납" ? (
+          filteredOutstanding.length === 0 ? (
+            <div style={{ marginTop: "40px", textAlign: "center", color: TEXT_DIM, fontSize: "13px" }}>
+              <Check size={36} style={{ margin: "0 auto 10px", opacity: 0.4 }} />
+              {searchQuery ? "검색 결과가 없습니다." : "현재 반납할 물품이 없습니다."}
+            </div>
+          ) : (
+            filteredOutstanding.map((o) => {
+              const matched = inventory.find(
+                (inv) => (inv.name || "").trim() === o.name && (inv.location || "").trim() === o.location
+              );
+              const hasImage = !!matched?.photo;
+              const imageUrl = hasImage ? getGoogleDriveImageUrl(matched!.photo) : "";
 
-            return (
-              <div
-                key={o.key}
-                className="mvp-card"
-                onClick={() => openReturnDetail(o)}
-                style={{
-                  background: CARD_BG,
-                  border: `1px solid ${BORDER}`,
-                  borderRadius: "16px",
-                  padding: "10px",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "12px",
-                  cursor: "pointer",
-                }}
-              >
+              return (
                 <div
+                  key={o.key}
+                  className="mvp-card"
+                  onClick={() => openReturnDetail(o)}
                   style={{
-                    width: "54px",
-                    height: "54px",
-                    borderRadius: "12px",
-                    overflow: "hidden",
-                    flexShrink: 0,
-                    background: isLightMode ? "#f1f5f9" : "#0f172a",
+                    background: CARD_BG,
+                    border: `1px solid ${BORDER}`,
+                    borderRadius: "16px",
+                    padding: "10px",
                     display: "flex",
                     alignItems: "center",
-                    justifyContent: "center",
+                    gap: "12px",
+                    cursor: "pointer",
                   }}
                 >
-                  {hasImage ? (
-                    <img
-                      src={imageUrl}
-                      alt={o.name}
-                      referrerPolicy="no-referrer"
-                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                      onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).style.display = "none";
-                      }}
-                    />
-                  ) : (
-                    <Package size={20} color={TEXT_DIM} />
-                  )}
-                </div>
-
-                <div style={{ flex: 1, minWidth: 0 }}>
                   <div
                     style={{
-                      fontSize: "13.5px",
-                      fontWeight: 800,
-                      color: TEXT_MAIN,
+                      width: "54px",
+                      height: "54px",
+                      borderRadius: "12px",
                       overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
+                      flexShrink: 0,
+                      background: isLightMode ? "#f1f5f9" : "#0f172a",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
                     }}
                   >
-                    {o.name}
+                    {hasImage ? (
+                      <img
+                        src={imageUrl}
+                        alt={o.name}
+                        referrerPolicy="no-referrer"
+                        style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                        onError={(e) => {
+                          (e.currentTarget as HTMLImageElement).style.display = "none";
+                        }}
+                      />
+                    ) : (
+                      <Package size={20} color={TEXT_DIM} />
+                    )}
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "11px", color: TEXT_DIM, marginTop: "3px" }}>
-                    <MapPin size={10} />
-                    <span className="mono">{o.location || "위치 미지정"}</span>
-                    <span>·</span>
-                    <User size={10} />
-                    <span>{o.user || "이름 미상"}</span>
+
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontSize: "13.5px",
+                        fontWeight: 800,
+                        color: TEXT_MAIN,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {o.name}
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "11px", color: TEXT_DIM, marginTop: "3px" }}>
+                      <MapPin size={10} />
+                      <span className="mono">{o.location || "위치 미지정"}</span>
+                      <span>·</span>
+                      <User size={10} />
+                      <span>{o.user || "이름 미상"}</span>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "4px", flexShrink: 0 }}>
+                    <span
+                      className="mono"
+                      style={{
+                        fontSize: "12px",
+                        fontWeight: 800,
+                        color: AMBER,
+                        background: "rgba(245,158,11,0.12)",
+                        padding: "3px 8px",
+                        borderRadius: "999px",
+                      }}
+                    >
+                      미반납 {o.qty}개
+                    </span>
+                    <ChevronRight size={16} color={TEXT_DIM} />
+                  </div>
+                </div>
+              );
+            })
+          )
+        ) : mode === "등록" ? (
+          /* =========================================================
+             3. 신규 품목 등록 폼 (Admin 모바일 전용)
+             ========================================================= */
+          <form onSubmit={handleRegisterItemSubmit} style={{ display: "flex", flexDirection: "column", gap: "15px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+              <Package size={20} color="#6366f1" />
+              <div style={{ fontSize: "16px", fontWeight: 800, color: TEXT_MAIN }}>
+                📦 신규 물품 등록하기
+              </div>
+            </div>
+
+            {/* 품목명 */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "12px", fontWeight: 700, color: TEXT_DIM }}>물품명 *</label>
+              <input
+                className="mvp-input"
+                type="text"
+                placeholder="물품 이름을 입력하세요"
+                value={regName}
+                onChange={(e) => setRegName(e.target.value)}
+                style={inputBaseStyle}
+                required
+              />
+            </div>
+
+            {/* 위치 선택 */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <label style={{ fontSize: "12px", fontWeight: 700, color: TEXT_DIM }}>보관 위치 *</label>
+                <button
+                  type="button"
+                  onClick={() => setRegIsCustomLoc(!regIsCustomLoc)}
+                  style={{
+                    fontSize: "11px",
+                    color: "#6366f1",
+                    background: "transparent",
+                    border: "none",
+                    cursor: "pointer",
+                    fontWeight: 700,
+                  }}
+                >
+                  {regIsCustomLoc ? "랙 선택하기" : "위치 직접 입력"}
+                </button>
+              </div>
+
+              {regIsCustomLoc ? (
+                <input
+                  className="mvp-input"
+                  type="text"
+                  placeholder="보관 위치 입력 (예: A-01)"
+                  value={regCustomLocation}
+                  onChange={(e) => setRegCustomLocation(e.target.value)}
+                  style={inputBaseStyle}
+                  required
+                />
+              ) : (
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <select
+                    className="mvp-input"
+                    value={regRackId}
+                    onChange={(e) => setRegRackId(e.target.value)}
+                    style={{
+                      ...inputBaseStyle,
+                      flex: 1.2,
+                      padding: "12px",
+                      background: INPUT_BG,
+                      color: TEXT_MAIN,
+                      border: `1px solid ${BORDER}`,
+                      borderRadius: "12px",
+                    }}
+                  >
+                    <option value="" disabled>랙 선택</option>
+                    {racks.map((r) => (
+                      <option key={r.id} value={r.id}>{r.name || r.id}</option>
+                    ))}
+                  </select>
+                  <input
+                    className="mvp-input"
+                    type="text"
+                    placeholder="선반 (예: 01)"
+                    value={regShelf}
+                    onChange={(e) => setRegShelf(e.target.value)}
+                    style={{ ...inputBaseStyle, flex: 0.8 }}
+                    required={!regIsCustomLoc}
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* 규격 및 초기 수량 */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                <label style={{ fontSize: "12px", fontWeight: 700, color: TEXT_DIM }}>규격 (상세 설명)</label>
+                <input
+                  className="mvp-input"
+                  type="text"
+                  placeholder="예: 50A"
+                  value={regSpec}
+                  onChange={(e) => setRegSpec(e.target.value)}
+                  style={inputBaseStyle}
+                />
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                <label style={{ fontSize: "12px", fontWeight: 700, color: TEXT_DIM }}>초기 재고수량</label>
+                <div style={{ display: "flex", gap: "6px" }}>
+                  <input
+                    className="mvp-input"
+                    type="text"
+                    placeholder="수량"
+                    value={regStock}
+                    onChange={(e) => setRegStock(e.target.value)}
+                    style={{ ...inputBaseStyle, flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setRegStock("N/A")}
+                    style={{
+                      padding: "0 12px",
+                      background: regStock === "N/A" ? "#6366f1" : "rgba(255,255,255,0.05)",
+                      color: regStock === "N/A" ? "#ffffff" : TEXT_DIM,
+                      border: `1px solid ${BORDER}`,
+                      borderRadius: "12px",
+                      fontSize: "11px",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                    }}
+                  >
+                    N/A
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* 담당자 & 특이사항 */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                <label style={{ fontSize: "12px", fontWeight: 700, color: TEXT_DIM }}>등록 담당자</label>
+                <input
+                  className="mvp-input"
+                  type="text"
+                  placeholder="담당자명"
+                  value={regManager}
+                  onChange={(e) => setRegManager(e.target.value)}
+                  style={inputBaseStyle}
+                />
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                <label style={{ fontSize: "12px", fontWeight: 700, color: TEXT_DIM }}>비고 (참고사항)</label>
+                <input
+                  className="mvp-input"
+                  type="text"
+                  placeholder="비고"
+                  value={regNote}
+                  onChange={(e) => setRegNote(e.target.value)}
+                  style={inputBaseStyle}
+                />
+              </div>
+            </div>
+
+            {/* 사진 등록 (링크 입력 + 파일 직접 업로드) */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "12px", fontWeight: 700, color: TEXT_DIM }}>사진 주소 또는 이미지 직접 업로드</label>
+              <input
+                className="mvp-input"
+                type="text"
+                placeholder={regPhoto.startsWith("data:image/") ? "파일 직접 촬영/업로드됨" : "구글 드라이브 주소를 입력하거나 아래에서 직접 촬영/업로드하세요"}
+                value={regPhoto.startsWith("data:image/") ? "" : regPhoto}
+                disabled={regPhoto.startsWith("data:image/")}
+                onChange={(e) => setRegPhoto(e.target.value)}
+                style={{ ...inputBaseStyle, opacity: regPhoto.startsWith("data:image/") ? 0.6 : 1 }}
+              />
+              <div
+                style={{
+                  border: `1px dashed ${BORDER}`,
+                  borderRadius: "12px",
+                  padding: "12px",
+                  textAlign: "center",
+                  background: isLightMode ? "#f8fafc" : "rgba(255, 255, 255, 0.02)",
+                  cursor: "pointer",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: "6px",
+                  marginTop: "4px"
+                }}
+                onClick={() => document.getElementById("mobile-reg-photo-upload")?.click()}
+              >
+                <input
+                  type="file"
+                  id="mobile-reg-photo-upload"
+                  accept="image/*"
+                  style={{ display: "none" }}
+                  onChange={handleRegPhotoChange}
+                />
+                {regPhoto && regPhoto.startsWith("data:image/") ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px", width: "100%", justifyContent: "center" }}>
+                    <img
+                      src={regPhoto}
+                      alt="Uploaded Preview"
+                      style={{ width: "38px", height: "38px", borderRadius: "6px", objectFit: "cover" }}
+                    />
+                    <div style={{ textAlign: "left" }}>
+                      <span style={{ fontSize: "12px", fontWeight: 700, color: "#6366f1", display: "block" }}>
+                        📸 이미지 업로드 준비 완료
+                      </span>
+                      <span style={{ fontSize: "10px", color: TEXT_DIM, display: "block" }}>
+                        등록 완료 시 드라이브 폴더에 자동 저장됩니다.
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="mvp-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setRegPhoto("");
+                      }}
+                      style={{
+                        marginLeft: "auto",
+                        background: "rgba(239, 68, 68, 0.15)",
+                        color: "#ef4444",
+                        border: "none",
+                        borderRadius: "6px",
+                        padding: "4px 8px",
+                        fontSize: "11px",
+                        fontWeight: 700
+                      }}
+                    >
+                      삭제
+                    </button>
+                  </div>
+                ) : isRegUploadingImage ? (
+                  <span style={{ fontSize: "12px", color: TEXT_DIM }}>이미지 가져오는 중...</span>
+                ) : (
+                  <>
+                    <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                      <Camera size={16} style={{ color: TEXT_DIM }} />
+                      <span style={{ fontSize: "12.5px", fontWeight: 700, color: TEXT_MAIN }}>사진 직접 찍기 / 이미지 파일 업로드</span>
+                    </div>
+                    <span style={{ fontSize: "10px", color: TEXT_DIM }}>
+                      (지정 드라이브 폴더에 오브젝트 이름으로 저장됩니다)
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* 구매 링크 */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <label style={{ fontSize: "12px", fontWeight: 700, color: TEXT_DIM }}>구매 링크</label>
+              <input
+                className="mvp-input"
+                type="text"
+                placeholder="URL 주소 (기본값: N/A)"
+                value={regLink}
+                onChange={(e) => setRegLink(e.target.value)}
+                style={inputBaseStyle}
+              />
+            </div>
+
+            <button
+              type="submit"
+              className="mvp-btn"
+              disabled={regSubmitting}
+              style={{
+                width: "100%",
+                padding: "15px",
+                borderRadius: "14px",
+                background: "#6366f1",
+                color: "#ffffff",
+                fontSize: "15px",
+                fontWeight: 800,
+                marginTop: "10px",
+                boxShadow: "0 6px 20px rgba(99,102,241,0.25)",
+              }}
+            >
+              {regSubmitting ? "실시간 클라우드 등록 중..." : "📦 신규 물품 정식 등록"}
+            </button>
+          </form>
+        ) : (
+          /* =========================================================
+             4. 불량 제품 관리 및 등록 (Admin 모바일 전용)
+             ========================================================= */
+          <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+            {/* 불량 탭 내부 서브 탭 스위처 */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: "4px",
+                background: isLightMode ? "#f1f5f9" : "#111827",
+                padding: "3px",
+                borderRadius: "10px",
+              }}
+            >
+              <button
+                type="button"
+                className="mvp-btn"
+                onClick={() => setDefectTab("list")}
+                style={{
+                  padding: "8px",
+                  borderRadius: "8px",
+                  fontSize: "12.5px",
+                  fontWeight: 700,
+                  background: defectTab === "list" ? AMBER : "transparent",
+                  color: defectTab === "list" ? "#ffffff" : TEXT_DIM,
+                }}
+              >
+                📜 불량 대장 ({defectLogs.length}건)
+              </button>
+              <button
+                type="button"
+                className="mvp-btn"
+                onClick={() => setDefectTab("register")}
+                style={{
+                  padding: "8px",
+                  borderRadius: "8px",
+                  fontSize: "12.5px",
+                  fontWeight: 700,
+                  background: defectTab === "register" ? AMBER : "transparent",
+                  color: defectTab === "register" ? "#ffffff" : TEXT_DIM,
+                }}
+              >
+                ⚠️ 불량품 등록
+              </button>
+            </div>
+
+            {defectTab === "list" ? (
+              /* 4-A. 불량 로그 목록 */
+              filteredDefectLogs.length === 0 ? (
+                <div style={{ marginTop: "40px", textAlign: "center", color: TEXT_DIM, fontSize: "13px" }}>
+                  <Check size={36} style={{ margin: "0 auto 10px", opacity: 0.4 }} />
+                  {searchQuery ? "검색 결과와 일치하는 불량 내역이 없습니다." : "기록된 불량 내역이 존재하지 않습니다."}
+                </div>
+              ) : (
+                [...filteredDefectLogs]
+                  .sort((a, b) => compareDatesDescending(a.timestamp, b.timestamp))
+                  .map((log, index) => (
+                    <div
+                      key={log.rowIndex || index}
+                      style={{
+                        background: CARD_BG,
+                        border: `1px solid ${BORDER}`,
+                        borderRadius: "16px",
+                        padding: "14px",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "6px",
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "8px" }}>
+                        <span style={{ fontSize: "14px", fontWeight: 800, color: TEXT_MAIN }}>
+                          {log.name}
+                        </span>
+                        <span
+                          style={{
+                            fontSize: "11px",
+                            fontWeight: 800,
+                            color: DANGER,
+                            background: "rgba(239,68,68,0.1)",
+                            padding: "2px 6px",
+                            borderRadius: "4px",
+                          }}
+                        >
+                          {log.defectType}
+                        </span>
+                      </div>
+
+                      <div style={{ display: "flex", gap: "8px", fontSize: "11px", color: TEXT_DIM }}>
+                        <span>📍 {log.location}</span>
+                        <span>·</span>
+                        <span>📦 {log.qty}개</span>
+                        <span>·</span>
+                        <span>👤 {log.manager}</span>
+                      </div>
+
+                      {log.note && (
+                        <div
+                          style={{
+                            fontSize: "12px",
+                            color: TEXT_DIM,
+                            background: isLightMode ? "#f8fafc" : "rgba(255,255,255,0.03)",
+                            padding: "8px 10px",
+                            borderRadius: "8px",
+                            borderLeft: `3px solid ${AMBER}`,
+                            marginTop: "4px",
+                          }}
+                        >
+                          {log.note}
+                        </div>
+                      )}
+
+                      <div
+                        style={{
+                          fontSize: "11px",
+                          fontWeight: 700,
+                          color: GREEN,
+                          alignSelf: "flex-start",
+                          background: "rgba(16,185,129,0.08)",
+                          padding: "3px 6px",
+                          borderRadius: "4px",
+                          marginTop: "2px",
+                        }}
+                      >
+                        ✅ {log.actionTaken || "조치 예정"}
+                      </div>
+
+                      <div style={{ fontSize: "9.5px", color: TEXT_DIM, alignSelf: "flex-end", marginTop: "2px" }}>
+                        📅 {log.timestamp}
+                      </div>
+                    </div>
+                  ))
+              )
+            ) : (
+              /* 4-B. 불량 제품 등록 폼 */
+              <form onSubmit={handleRegisterDefectSubmit} style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+                {/* 품목 선택 */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <label style={{ fontSize: "12px", fontWeight: 700, color: TEXT_DIM }}>품목 고르기</label>
+                  <select
+                    className="mvp-input"
+                    value={defSelectedInvIndex}
+                    onChange={(e) => {
+                      const idx = Number(e.target.value);
+                      setDefSelectedInvIndex(idx);
+                      if (idx !== -1) {
+                        setDefCustomName(inventory[idx].name);
+                        setDefCustomLoc(inventory[idx].location);
+                      } else {
+                        setDefCustomName("");
+                        setDefCustomLoc("");
+                      }
+                    }}
+                    style={{
+                      ...inputBaseStyle,
+                      background: INPUT_BG,
+                      color: TEXT_MAIN,
+                      border: `1px solid ${BORDER}`,
+                      borderRadius: "12px",
+                    }}
+                  >
+                    <option value={-1}>직접 품목 입력하기</option>
+                    {inventory.map((item, idx) => (
+                      <option key={idx} value={idx}>
+                        {item.name} ({item.location})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 직접 입력 시 물품명/위치 노출 */}
+                {defSelectedInvIndex === -1 ? (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                      <label style={{ fontSize: "12px", fontWeight: 700, color: TEXT_DIM }}>물품명 *</label>
+                      <input
+                        className="mvp-input"
+                        type="text"
+                        placeholder="이름 입력"
+                        value={defCustomName}
+                        onChange={(e) => setDefCustomName(e.target.value)}
+                        style={inputBaseStyle}
+                        required
+                      />
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                      <label style={{ fontSize: "12px", fontWeight: 700, color: TEXT_DIM }}>보관 위치 *</label>
+                      <input
+                        className="mvp-input"
+                        type="text"
+                        placeholder="위치 입력"
+                        value={defCustomLoc}
+                        onChange={(e) => setDefCustomLoc(e.target.value)}
+                        style={inputBaseStyle}
+                        required
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      fontSize: "12px",
+                      color: AMBER,
+                      background: "rgba(245,158,11,0.08)",
+                      border: "1px dashed rgba(245,158,11,0.2)",
+                      borderRadius: "10px",
+                      padding: "10px 12px",
+                      fontWeight: 700,
+                    }}
+                  >
+                    📍 선택 물품 보관 위치: {defCustomLoc || "지정되지 않음"}
+                  </div>
+                )}
+
+                {/* 수량 */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <label style={{ fontSize: "12px", fontWeight: 700, color: TEXT_DIM }}>불량 수량 *</label>
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                    <button
+                      type="button"
+                      className="mvp-btn"
+                      onClick={() => setDefQty((q) => Math.max(1, q - 1))}
+                      style={{
+                        width: "44px",
+                        height: "44px",
+                        borderRadius: "12px",
+                        background: isLightMode ? "#e2e8f0" : "#1e293b",
+                        color: TEXT_MAIN,
+                        fontSize: "18px",
+                        fontWeight: "bold",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <Minus size={16} />
+                    </button>
+                    <input
+                      className="mvp-input"
+                      type="number"
+                      value={defQty}
+                      onChange={(e) => setDefQty(Math.max(1, Number(e.target.value)))}
+                      style={{ ...inputBaseStyle, flex: 1, textAlign: "center" }}
+                      required
+                    />
+                    <button
+                      type="button"
+                      className="mvp-btn"
+                      onClick={() => setDefQty((q) => q + 1)}
+                      style={{
+                        width: "44px",
+                        height: "44px",
+                        borderRadius: "12px",
+                        background: isLightMode ? "#e2e8f0" : "#1e293b",
+                        color: TEXT_MAIN,
+                        fontSize: "18px",
+                        fontWeight: "bold",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <Plus size={16} />
+                    </button>
                   </div>
                 </div>
 
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "4px", flexShrink: 0 }}>
-                  <span
-                    className="mono"
-                    style={{
-                      fontSize: "12px",
-                      fontWeight: 800,
-                      color: AMBER,
-                      background: "rgba(245,158,11,0.12)",
-                      padding: "3px 8px",
-                      borderRadius: "999px",
-                    }}
-                  >
-                    미반납 {o.qty}개
-                  </span>
-                  <ChevronRight size={16} color={TEXT_DIM} />
+                {/* 불량 유형 */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <label style={{ fontSize: "12px", fontWeight: 700, color: TEXT_DIM }}>불량 유형</label>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                    {["파손", "부식", "기능 오작동", "오염", "기타"].map((type) => (
+                      <button
+                        key={type}
+                        type="button"
+                        className="mvp-btn"
+                        onClick={() => setDefType(type)}
+                        style={{
+                          padding: "8px 12px",
+                          borderRadius: "8px",
+                          fontSize: "12px",
+                          fontWeight: 700,
+                          background: defType === type ? AMBER : (isLightMode ? "#e2e8f0" : "#1e293b"),
+                          color: defType === type ? "#ffffff" : TEXT_MAIN,
+                          border: `1px solid ${BORDER}`,
+                        }}
+                      >
+                        {type}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            );
-          })
+
+                {/* 접수자 */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <label style={{ fontSize: "12px", fontWeight: 700, color: TEXT_DIM }}>불량 접수자</label>
+                  <input
+                    className="mvp-input"
+                    type="text"
+                    placeholder="접수 담당자 이름"
+                    value={defManager}
+                    onChange={(e) => setDefManager(e.target.value)}
+                    style={inputBaseStyle}
+                    required
+                  />
+                </div>
+
+                {/* 상세 내역 */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <label style={{ fontSize: "12px", fontWeight: 700, color: TEXT_DIM }}>상세 불량 내용</label>
+                  <input
+                    className="mvp-input"
+                    type="text"
+                    placeholder="현상 및 고장 정보 입력"
+                    value={defNote}
+                    onChange={(e) => setDefNote(e.target.value)}
+                    style={inputBaseStyle}
+                  />
+                </div>
+
+                {/* 후속 조치 */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <label style={{ fontSize: "12px", fontWeight: 700, color: TEXT_DIM }}>조치 예정 사항</label>
+                  <input
+                    className="mvp-input"
+                    type="text"
+                    placeholder="예: 폐기 대기, AS 접수 예정"
+                    value={defActionTaken}
+                    onChange={(e) => setDefActionTaken(e.target.value)}
+                    style={inputBaseStyle}
+                  />
+                </div>
+
+                {/* 불량 사진 직접 촬영 / 업로드 */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <label style={{ fontSize: "12px", fontWeight: 700, color: TEXT_DIM }}>불량 사진 직접 촬영 / 업로드</label>
+                  <div
+                    style={{
+                      border: `1px dashed ${BORDER}`,
+                      borderRadius: "12px",
+                      padding: "12px",
+                      textAlign: "center",
+                      background: isLightMode ? "#f8fafc" : "rgba(255, 255, 255, 0.02)",
+                      cursor: "pointer",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      gap: "6px",
+                      marginTop: "4px"
+                    }}
+                    onClick={() => document.getElementById("mobile-def-photo-upload")?.click()}
+                  >
+                    <input
+                      type="file"
+                      id="mobile-def-photo-upload"
+                      accept="image/*"
+                      style={{ display: "none" }}
+                      onChange={handleDefPhotoChange}
+                    />
+                    {defPhoto ? (
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px", width: "100%", justifyContent: "center" }}>
+                        <img
+                          src={defPhoto}
+                          alt="Defect Preview"
+                          style={{ width: "38px", height: "38px", borderRadius: "6px", objectFit: "cover" }}
+                        />
+                        <div style={{ textAlign: "left" }}>
+                          <span style={{ fontSize: "12px", fontWeight: 700, color: AMBER, display: "block" }}>
+                            📸 불량 사진 등록 완료
+                          </span>
+                          <span style={{ fontSize: "10px", color: TEXT_DIM, display: "block" }}>
+                            접수 시 구글 드라이브에 자동 등록됩니다.
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className="mvp-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDefPhoto("");
+                          }}
+                          style={{
+                            marginLeft: "auto",
+                            background: "rgba(239, 68, 68, 0.15)",
+                            color: "#ef4444",
+                            border: "none",
+                            borderRadius: "6px",
+                            padding: "4px 8px",
+                            fontSize: "11px",
+                            fontWeight: 700
+                          }}
+                        >
+                          삭제
+                        </button>
+                      </div>
+                    ) : isDefUploadingImage ? (
+                      <span style={{ fontSize: "12px", color: TEXT_DIM }}>이미지 로드 중...</span>
+                    ) : (
+                      <>
+                        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                          <Camera size={16} style={{ color: TEXT_DIM }} />
+                          <span style={{ fontSize: "12.5px", fontWeight: 700, color: TEXT_MAIN }}>불량 사진 직접 찍기 / 이미지 파일 업로드</span>
+                        </div>
+                        <span style={{ fontSize: "10px", color: TEXT_DIM }}>
+                          (자동으로 연동된 구글 드라이브 폴더에 업로드되어 실시간 연동됩니다)
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="mvp-btn"
+                  disabled={defectSubmitting}
+                  style={{
+                    width: "100%",
+                    padding: "15px",
+                    borderRadius: "14px",
+                    background: AMBER,
+                    color: "#ffffff",
+                    fontSize: "15px",
+                    fontWeight: 800,
+                    boxShadow: "0 6px 20px rgba(245,158,11,0.25)",
+                    marginTop: "8px",
+                  }}
+                >
+                  {defectSubmitting ? "실시간 동기화 중..." : "⚠️ 불량 제품 접수 등록"}
+                </button>
+              </form>
+            )}
+          </div>
         )}
       </main>
 

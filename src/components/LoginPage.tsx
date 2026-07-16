@@ -21,7 +21,7 @@ export default function LoginPage({
   syncing,
   isMobile,
 }: LoginPageProps) {
-  const [selectedMode, setSelectedMode] = useState<"view" | "admin">(isMobile ? "view" : "admin");
+  const [selectedMode, setSelectedMode] = useState<"view" | "admin">("view");
   const [idInput, setIdInput] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
   const [localError, setLocalError] = useState("");
@@ -29,11 +29,6 @@ export default function LoginPage({
   const handleLoginSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setLocalError("");
-
-    if (isMobile) {
-      setLocalError("관리자 모드는 PC 또는 태블릿 환경에서만 접속할 수 있습니다.");
-      return;
-    }
 
     if (!idInput.trim() || !passwordInput.trim()) {
       setLocalError("아이디와 비밀번호를 모두 입력해 주세요.");
@@ -181,38 +176,34 @@ export default function LoginPage({
           {/* Right Choice Card: Admin Mode */}
           <button
             type="button"
-            disabled={isMobile}
             onClick={() => {
-              if (isMobile) return;
               setSelectedMode("admin");
               setLocalError("");
             }}
             style={{
-              background: isMobile
-                ? "transparent"
-                : selectedMode === "admin"
+              background: selectedMode === "admin"
                 ? (isLightMode ? "rgba(99, 102, 241, 0.05)" : "rgba(99, 102, 241, 0.15)")
                 : "transparent",
-              border: `2px solid ${!isMobile && selectedMode === "admin" ? ACCENT : BORDER_COLOR}`,
+              border: `2px solid ${selectedMode === "admin" ? ACCENT : BORDER_COLOR}`,
               borderRadius: "20px",
               padding: "32px 20px",
-              cursor: isMobile ? "not-allowed" : "pointer",
+              cursor: "pointer",
               textAlign: "center",
               display: "flex",
               flexDirection: "column",
               alignItems: "center",
               gap: "14px",
               transition: "all 0.2s ease-in-out",
-              opacity: isMobile ? 0.5 : 1,
-              boxShadow: !isMobile && selectedMode === "admin" ? `0 10px 25px ${isLightMode ? "rgba(99, 102, 241, 0.15)" : "rgba(99, 102, 241, 0.3)"}` : "none",
+              opacity: 1,
+              boxShadow: selectedMode === "admin" ? `0 10px 25px ${isLightMode ? "rgba(99, 102, 241, 0.15)" : "rgba(99, 102, 241, 0.3)"}` : "none",
             }}
             onMouseEnter={(e) => {
-              if (isMobile || selectedMode === "admin") return;
+              if (selectedMode === "admin") return;
               e.currentTarget.style.borderColor = ACCENT;
               e.currentTarget.style.background = isLightMode ? "rgba(99, 102, 241, 0.02)" : "rgba(255, 255, 255, 0.03)";
             }}
             onMouseLeave={(e) => {
-              if (isMobile || selectedMode === "admin") return;
+              if (selectedMode === "admin") return;
               e.currentTarget.style.borderColor = BORDER_COLOR;
               e.currentTarget.style.background = "transparent";
             }}
@@ -222,8 +213,8 @@ export default function LoginPage({
                 width: "56px",
                 height: "56px",
                 borderRadius: "50%",
-                background: !isMobile && selectedMode === "admin" ? ACCENT : (isLightMode ? "#e2e8f0" : "#334155"),
-                color: !isMobile && selectedMode === "admin" ? "#ffffff" : TEXT_DIM,
+                background: selectedMode === "admin" ? ACCENT : (isLightMode ? "#e2e8f0" : "#334155"),
+                color: selectedMode === "admin" ? "#ffffff" : TEXT_DIM,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -239,8 +230,8 @@ export default function LoginPage({
               <div style={{ fontSize: "11.5px", color: TEXT_DIM, lineHeight: "1.4" }}>
                 {isMobile ? (
                   <>
-                    PC 또는 태블릿에서만 이용 가능<br />
-                    <span style={{ color: "#f59e0b", fontWeight: 600 }}>🔒 모바일 접속 제한</span>
+                    모바일 대여/반납/등록/불량<br />
+                    <span style={{ color: ACCENT, fontWeight: 600 }}>[모바일 관리자 로그인]</span>
                   </>
                 ) : (
                   <>
@@ -257,9 +248,9 @@ export default function LoginPage({
           <div
             style={{
               fontSize: "12px",
-              color: "#f59e0b",
-              background: "rgba(245, 158, 11, 0.08)",
-              border: "1px solid rgba(245, 158, 11, 0.2)",
+              color: selectedMode === "admin" ? ACCENT : "#10b981",
+              background: selectedMode === "admin" ? "rgba(99, 102, 241, 0.08)" : "rgba(16, 185, 129, 0.08)",
+              border: selectedMode === "admin" ? "1px solid rgba(99, 102, 241, 0.2)" : "1px solid rgba(16, 185, 129, 0.2)",
               borderRadius: "12px",
               padding: "12px 14px",
               marginBottom: "24px",
@@ -267,13 +258,16 @@ export default function LoginPage({
               lineHeight: 1.5,
             }}
           >
-            🔒 관리자 모드는 재고 편집 등 민감한 기능을 포함하고 있어 PC 또는 태블릿 환경에서만 접속할 수 있습니다.<br />
-            모바일에서는 열람용 모드를 이용해 주세요.
+            {selectedMode === "admin" ? (
+              <span>📱 <b>모바일 관리자 모드 시스템</b>을 가동합니다. 대여, 반납, 신규 제품 등록 및 불량 접수를 한 곳에서 간편하게 처리할 수 있습니다.</span>
+            ) : (
+              <span>👀 현재 <b>열람용 모드</b>가 선택되어 있습니다. 우측의 관리자 모드를 선택하시면 로그인하여 직접 작업을 수행할 수 있습니다.</span>
+            )}
           </div>
         )}
 
         {/* Dynamic Panel based on selection */}
-        {selectedMode === "admin" && !isMobile && (
+        {selectedMode === "admin" && (
           <form onSubmit={handleLoginSubmit} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
             {/* ID Input */}
             <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
