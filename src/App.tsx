@@ -243,6 +243,56 @@ export default function App() {
     }
   }, []);
 
+  // --- 2-Way Hash Routing Synchronization ---
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash;
+      if (!hash || hash === "#" || hash === "#/") {
+        const hasUser = localStorage.getItem("wms_current_user") !== null || localStorage.getItem("wms_is_admin") === "true";
+        if (hasUser) {
+          window.location.hash = "#/monitor";
+        } else {
+          window.location.hash = "#/login";
+        }
+        return;
+      }
+
+      const path = hash.split("/")[1] || "";
+      if (path === "landing") {
+        setCurrentView("landing");
+      } else if (path === "login") {
+        setCurrentView("login");
+      } else if (path === "rental") {
+        setCurrentView("rental");
+      } else if (path === "monitor") {
+        setCurrentView("monitor");
+      } else if (path === "rent") {
+        setCurrentView("rent");
+      } else if (path === "defect") {
+        setCurrentView("defect");
+      } else if (path === "register") {
+        setCurrentView("monitor");
+      }
+    };
+
+    window.addEventListener("hashchange", handleHashChange);
+    handleHashChange(); // Initial load sync
+
+    return () => {
+      window.removeEventListener("hashchange", handleHashChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    const currentHash = window.location.hash.split("/")[1] || "";
+    if (currentView && currentHash !== currentView) {
+      if (currentView === "monitor" && window.location.hash.startsWith("#/register")) {
+        return;
+      }
+      window.location.hash = `#/${currentView}`;
+    }
+  }, [currentView]);
+
   // 구글 Apps Script 연동 상태 (로컬 스토리지 보존으로 새로고침해도 자동복구)
   const [scriptUrl, setScriptUrl] = useState(() => {
     if (typeof window !== "undefined") {
@@ -1461,7 +1511,7 @@ export default function App() {
 
   // 모바일인 경우, PC 화면을 축소한 형태가 아닌
   // 검색 / 사진확인 / 대여·반납 / 등록 / 불량제품에 집중한 전용 모바일 UI를 노출한다.
-  if (currentView === "monitor" && isMobile) {
+  if (isMobile && (currentView === "monitor" || currentView === "rent" || currentView === "defect")) {
     return (
       <MobileViewPage
         inventory={inventory}
@@ -1482,6 +1532,7 @@ export default function App() {
         isLightMode={isLightMode}
         toggleLightMode={toggleLightMode}
         connected={connected}
+        currentView={currentView}
       />
     );
   }

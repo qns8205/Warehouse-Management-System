@@ -37,6 +37,7 @@ interface MobileViewPageProps {
   isLightMode: boolean;
   toggleLightMode: () => void;
   connected: boolean;
+  currentView?: "landing" | "login" | "rental" | "monitor" | "defect" | "rent";
 }
 
 type Mode = "대여" | "반납" | "등록" | "불량";
@@ -72,6 +73,7 @@ export default function MobileViewPage({
   isLightMode,
   toggleLightMode,
   connected,
+  currentView = "monitor",
 }: MobileViewPageProps) {
   const [mode, setMode] = useState<Mode>("대여");
   const [searchQuery, setSearchQuery] = useState("");
@@ -288,16 +290,64 @@ export default function MobileViewPage({
     );
   }, [outstandingRentals, searchQuery]);
 
+  // ---------- URL Hash Synchronization for Mobile View ----------
+  useEffect(() => {
+    const syncFromHash = () => {
+      const hash = window.location.hash || "";
+      const parts = hash.split("/");
+      if (parts.length < 2) return;
+
+      const mainPath = parts[1]; // "monitor", "rent", "defect", "register"
+      const subPath = parts[2] as SheetMode || null; // "detail", "form", "edit-inventory" or null
+
+      // Sync tab mode
+      if (mainPath === "monitor") {
+        setMode("대여");
+      } else if (mainPath === "rent") {
+        setMode("반납");
+      } else if (mainPath === "defect") {
+        setMode("불량");
+      } else if (mainPath === "register") {
+        setMode("등록");
+      }
+
+      // Sync sheet mode
+      setSheetMode(subPath);
+
+      // If there's no sheet mode, clear active selected item
+      if (!subPath) {
+        setSelectedItem(null);
+        setOutstandingContext(null);
+      }
+    };
+
+    window.addEventListener("hashchange", syncFromHash);
+    syncFromHash(); // Initial load sync
+
+    return () => {
+      window.removeEventListener("hashchange", syncFromHash);
+    };
+  }, []);
+
   const switchMode = (m: Mode) => {
-    setMode(m);
     setSearchQuery("");
+    if (m === "대여") {
+      window.location.hash = "#/monitor";
+    } else if (m === "반납") {
+      window.location.hash = "#/rent";
+    } else if (m === "불량") {
+      window.location.hash = "#/defect";
+    } else if (m === "등록") {
+      window.location.hash = "#/register";
+    }
   };
 
   // ---------- 대여 탭에서 품목 탭 ----------
   const openItemDetail = (item: InventoryItem) => {
     setSelectedItem(item);
     setOutstandingContext(null);
-    setSheetMode("detail");
+    const base = window.location.hash.split("/")[1] || "monitor";
+    window.location.hash = `#/${base}/detail`;
   };
 
   // ---------- 반납 탭에서 미반납 내역 탭 ----------
@@ -321,15 +371,13 @@ export default function MobileViewPage({
       } as InventoryItem);
     setSelectedItem(item);
     setOutstandingContext(outstanding);
-    setSheetMode("detail");
+    const base = window.location.hash.split("/")[1] || "monitor";
+    window.location.hash = `#/${base}/detail`;
   };
 
   const closeSheet = () => {
-    setSheetMode(null);
-    setTimeout(() => {
-      setSelectedItem(null);
-      setOutstandingContext(null);
-    }, 200);
+    const base = window.location.hash.split("/")[1] || "monitor";
+    window.location.hash = `#/${base}`;
   };
 
   const openForm = () => {
@@ -342,10 +390,14 @@ export default function MobileViewPage({
       setFormQty(1);
     }
     setFormNote("");
-    setSheetMode("form");
+    const base = window.location.hash.split("/")[1] || "monitor";
+    window.location.hash = `#/${base}/form`;
   };
 
-  const backToDetail = () => setSheetMode("detail");
+  const backToDetail = () => {
+    const base = window.location.hash.split("/")[1] || "monitor";
+    window.location.hash = `#/${base}/detail`;
+  };
 
   const maxQty =
     mode === "대여" && selectedItem && typeof selectedItem.stock === "number"
@@ -571,7 +623,9 @@ export default function MobileViewPage({
     setEditSpec(selectedItem.spec || "");
     setEditNote(selectedItem.note || "");
     setEditManager(selectedItem.manager && selectedItem.manager !== "관리자" ? selectedItem.manager : defaultManagerName);
-    setSheetMode("edit-inventory");
+    
+    const base = window.location.hash.split("/")[1] || "monitor";
+    window.location.hash = `#/${base}/edit-inventory`;
   };
 
   const inputBaseStyle: React.CSSProperties = {
