@@ -1,4 +1,7 @@
 import React, { useState } from "react";
+// @ts-ignore
+import scriptCode from "../../AppsScript_Code.gs?raw";
+
 
 interface SetupModalProps {
   scriptUrl: string;
@@ -45,582 +48,8 @@ export default function SetupModal({
     }
   };
 
-  const scriptCode = `// AppsScript_Code.gs
-// 이 코드를 구글 스프레드시트의 [확장 프로그램] -> [Apps Script]에 붙여넣고 웹앱으로 배포하세요.
+  // scriptCode is now imported dynamically from '../../AppsScript_Code.gs' at build time to prevent code drift and redundancy.
 
-const INVENTORY_SHEET_NAME = "시트1"; // 실제 사용 중인 스프레드시트의 시트 탭 이름으로 변경하세요.
-const DEFECT_SHEET_NAME = "불량로그";
-const RENT_SHEET_NAME = "대여로그";
-const USERS_SHEET_NAME = "Users";
-
-function doGet(e) {
-  try {
-    const action = e.parameter.action;
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(INVENTORY_SHEET_NAME);
-    if (!sheet) {
-      return responseJSON({ success: false, error: "시트 '" + INVENTORY_SHEET_NAME + "'를 찾을 수 없습니다." });
-    }
-    
-    // 불량로그 시트 가져오거나 없으면 자동 생성
-    let defectSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(DEFECT_SHEET_NAME);
-    if (!defectSheet) {
-      defectSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(DEFECT_SHEET_NAME);
-      defectSheet.getRange(1, 1, 1, 7).setValues([["제품명", "개수", "기록 시간", "불량 유형", "세부 사항", "대처 방안", "사진"]]);
-    }
-    
-    // 대여로그 시트 가져오거나 없으면 자동 생성
-    let rentSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(RENT_SHEET_NAME);
-    if (!rentSheet) {
-      rentSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(RENT_SHEET_NAME);
-      rentSheet.getRange(1, 1, 1, 7).setValues([["기록 시간", "구분", "위치", "제품명", "수량", "대여자 성함", "메모"]]);
-    }
-
-    // Users 시트 가져오거나 없으면 자동 생성
-    let usersSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(USERS_SHEET_NAME);
-    if (!usersSheet) {
-      usersSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(USERS_SHEET_NAME);
-      usersSheet.getRange(1, 1, 1, 3).setValues([["아이디", "비밀번호", "이름"]]);
-      usersSheet.getRange(2, 1, 1, 3).setValues([["admin", "1234", "관리자"]]);
-    }
-    
-    if (action === "getAll") {
-      const inventory = getInventoryData(sheet);
-      const sectors = getSectorLayout();
-      const defectLogs = getDefectLogs(defectSheet);
-      const rentLogs = getRentLogs(rentSheet);
-      const users = getUsersData(usersSheet);
-      let robotObjects = [];
-      try {
-        robotObjects = getRobotObjects(SpreadsheetApp.getActiveSpreadsheet());
-      } catch (err) {}
-      return responseJSON({
-        success: true,
-        inventory: inventory,
-        sectors: sectors,
-        defectLogs: defectLogs,
-        rentLogs: rentLogs,
-        users: users,
-        robotObjects: robotObjects
-      });
-    }
-    
-    return responseJSON({ success: false, error: "알 수 없는 GET 액션입니다." });
-  } catch (err) {
-    return responseJSON({ success: false, error: err.toString() });
-  }
-}
-
-function doPost(e) {
-  try {
-    const requestData = JSON.parse(e.postData.contents);
-    const action = requestData.action;
-    const payload = requestData.payload;
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(INVENTORY_SHEET_NAME);
-    if (!sheet) {
-      return responseJSON({ success: false, error: "시트 '" + INVENTORY_SHEET_NAME + "'를 찾을 수 없습니다." });
-    }
-    
-    if (action === "addInventoryItem") {
-      const newRowIndex = addInventoryItem(sheet, payload);
-      return responseJSON({ success: true, rowIndex: newRowIndex });
-    }
-    
-    if (action === "updateInventoryItem") {
-      updateInventoryItem(sheet, payload);
-      return responseJSON({ success: true });
-    }
-    
-    if (action === "deleteInventoryItem") {
-      deleteInventoryItem(sheet, payload.rowIndex);
-      return responseJSON({ success: true });
-    }
-    
-    if (action === "saveSectorLayout") {
-      saveSectorLayout(payload.sectors);
-      return responseJSON({ success: true });
-    }
-    
-    if (action === "deleteSector") {
-      deleteSector(payload.sectorId);
-      return responseJSON({ success: true });
-    }
-
-    if (action === "addDefectLog") {
-      let defectSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(DEFECT_SHEET_NAME);
-      if (!defectSheet) {
-        defectSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(DEFECT_SHEET_NAME);
-        defectSheet.getRange(1, 1, 1, 7).setValues([["제품명", "개수", "기록 시간", "불량 유형", "세부 사항", "대처 방안", "사진"]]);
-      }
-      const newRowIndex = addDefectLog(defectSheet, payload);
-      return responseJSON({ success: true, rowIndex: newRowIndex });
-    }
-
-    if (action === "rentInventoryItem") {
-      let rentSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(RENT_SHEET_NAME);
-      if (!rentSheet) {
-        rentSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(RENT_SHEET_NAME);
-        rentSheet.getRange(1, 1, 1, 7).setValues([["기록 시간", "구분", "위치", "제품명", "수량", "대여자 성함", "메모"]]);
-      }
-      const newRowIndex = addRentLog(rentSheet, payload);
-      
-      // Update inventory stock count
-      const lastRow = sheet.getLastRow();
-      if (lastRow >= 2) {
-        const values = sheet.getRange(2, 1, lastRow - 1, 9).getValues();
-        for (let i = 0; i < values.length; i++) {
-          // Compare location (Col 1) and name (Col 3) to find unique match
-          if (String(values[i][0]).trim() === String(payload.location).trim() && 
-              String(values[i][2]).trim() === String(payload.name).trim()) {
-            const rowIdx = i + 2;
-            const stockCell = sheet.getRange(rowIdx, 5); // E열 (index 5, 1-indexed)
-            let currentStock = Number(stockCell.getValue() || 0);
-            const qtyChange = Number(payload.qty || 0);
-            
-            if (payload.type === "대여" || payload.type === "소모") {
-              currentStock = Math.max(0, currentStock - qtyChange);
-            } else if (payload.type === "반납") {
-              currentStock = currentStock + qtyChange;
-            }
-            stockCell.setValue(currentStock);
-            
-            // F열 (수정일시) 및 G열 (담당자) 업데이트
-            sheet.getRange(rowIdx, 6).setValue(formatDate(new Date()));
-            sheet.getRange(rowIdx, 7).setValue(payload.user || "");
-            break;
-          }
-        }
-      }
-      return responseJSON({ success: true, rowIndex: newRowIndex });
-    }
-    
-    return responseJSON({ success: false, error: "알 수 없는 POST 액션입니다." });
-  } catch (err) {
-    return responseJSON({ success: false, error: err.toString() });
-  }
-}
-
-function getInventoryData(sheet) {
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return [];
-  
-  const range = sheet.getRange(2, 1, lastRow - 1, 9);
-  const values = range.getValues();
-  const displayValues = range.getDisplayValues();
-  const richTextValues = range.getRichTextValues();
-  const inventory = [];
-  
-  for (let i = 0; i < values.length; i++) {
-    const row = values[i];
-    const richRow = richTextValues[i];
-    const rowIndex = i + 2;
-    
-    // I열 (index 8, 사진 링크용)에서 이미지 주소 추출 (B열은 참고하지 않음)
-    let photoUrl = "";
-    if (richRow && richRow[8]) {
-      photoUrl = richRow[8].getLinkUrl() || "";
-      if (!photoUrl && typeof richRow[8].getRuns === "function") {
-        const runs = richRow[8].getRuns();
-        for (let r = 0; r < runs.length; r++) {
-          const runUrl = runs[r].getLinkUrl();
-          if (runUrl) {
-            photoUrl = runUrl;
-            break;
-          }
-        }
-      }
-    }
-    if (!photoUrl) {
-      photoUrl = String(row[8] || "").trim();
-    }
-    if (photoUrl === "undefined") {
-      photoUrl = "";
-    }
-    
-    // 스마트 칩 링크 주소 추출 (D열 / index 3)
-    let itemLink = "";
-    if (richRow && richRow[3]) {
-      itemLink = richRow[3].getLinkUrl() || "";
-      if (!itemLink && typeof richRow[3].getRuns === "function") {
-        const runs = richRow[3].getRuns();
-        for (let r = 0; r < runs.length; r++) {
-          const runUrl = runs[r].getLinkUrl();
-          if (runUrl) {
-            itemLink = runUrl;
-            break;
-          }
-        }
-      }
-    }
-    if (!itemLink) {
-      itemLink = String(row[3] || "").trim();
-    }
-    
-    inventory.push({
-      rowIndex: rowIndex,
-      location: String(row[0] || "").trim(),
-      photo: photoUrl,
-      name: String(row[2] || "").trim(),
-      link: itemLink,
-      stock: (row[4] === "" || isNaN(Number(row[4]))) ? null : Number(row[4]),
-      updatedAt: displayValues[i][5] || "",
-      manager: String(row[6] || "").trim(),
-      note: String(row[7] || "").trim(),
-      spec: String(row[1] || "").trim() // Column B (서브 분류로 사용)
-    });
-  }
-  return inventory;
-}
-
-function getDefectLogs(sheet) {
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return [];
-  
-  const lastCol = Math.min(sheet.getLastColumn(), 7);
-  const range = sheet.getRange(2, 1, lastRow - 1, lastCol);
-  const values = range.getValues();
-  const displayValues = range.getDisplayValues();
-  const logs = [];
-  for (let i = 0; i < values.length; i++) {
-    const row = values[i];
-    const rawTs = displayValues[i][2] ? String(displayValues[i][2]).trim() : (row[2] instanceof Date ? formatDate(row[2]) : String(row[2] || "").trim());
-    const photoUrl = lastCol >= 7 ? String(row[6] || "").trim() : "";
-    
-    logs.push({
-      rowIndex: i + 2,
-      timestamp: rawTs.replace(/^'/, ""),
-      location: "",
-      name: String(row[0] || "").trim(),
-      qty: row[1] === "" ? null : Number(row[1]),
-      defectType: String(row[3] || "").trim(),
-      manager: "",
-      note: String(row[4] || "").trim(),
-      actionTaken: String(row[5] || "").trim(),
-      photo: photoUrl
-    });
-  }
-  return logs;
-}
-
-function addDefectLog(sheet, log) {
-  const lastRow = sheet.getLastRow();
-  const nextRow = lastRow + 1;
-  
-  if (sheet.getLastColumn() < 7) {
-    sheet.getRange(1, 7).setValue("사진");
-  }
-  
-  // Use original log name exactly as-is (parentheses processing is removed)
-  let pName = String(log.name || "알수없음").trim();
-  
-  let photoVal = log.photo || "";
-  if (photoVal.indexOf("data:image/") === 0) {
-    try {
-      const parts = photoVal.split(",");
-      const mimeType = parts[0].split(";")[0].split(":")[1];
-      const base64Data = parts[1];
-      const decoded = Utilities.base64Decode(base64Data);
-      const ext = mimeType.split("/")[1] || "jpeg";
-      
-      // Determine folder
-      let folder;
-      try {
-        folder = DriveApp.getFolderById("1gs7NcJWgFY37OZ4aEuG6Z-PNlmAfz6_R");
-      } catch (fErr) {
-        const folders = DriveApp.getFoldersByName("Image for Broken Item");
-        if (folders.hasNext()) {
-          folder = folders.next();
-        } else {
-          folder = DriveApp.createFolder("Image for Broken Item");
-        }
-      }
-
-      // Rename file format: "제품명_기록 시간_불량 유형"
-      const pType = String(log.defectType || "기타불량").trim();
-      const rawTs = String(log.timestamp || formatDate(new Date())).replace(/'/g, "").trim();
-      const safeTs = rawTs.replace(/[:\/]/g, "-");
-      const filename = pName + "_" + safeTs + "_" + pType + "." + ext;
-
-      const blob = Utilities.newBlob(decoded, mimeType, filename);
-      const file = folder.createFile(blob);
-      
-      // Cascading setSharing: handles corporate security policies restricting public links
-      try {
-        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-      } catch (shareErr) {
-        try {
-          file.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW);
-        } catch (domainShareErr) {
-          // Keep private to the owner if sharing is completely locked down
-        }
-      }
-      
-      photoVal = "https://lh3.googleusercontent.com/d/" + file.getId();
-    } catch (e) {
-      photoVal = "업로드 실패: 구글 드라이브 접근 권한이 필요합니다. Apps Script 에디터 우측 상단 '실행(Run)'을 1회 실행하여 권한 승인을 완료해 주세요. (상세 오류: " + e.toString() + ")";
-    }
-  }
-  
-  const nowStr = formatDate(new Date());
-  const ts = log.timestamp || nowStr;
-  const rowValues = [
-    pName,
-    log.qty === "" || log.qty == null ? "" : Number(log.qty),
-    ts.indexOf("'") === 0 ? ts : "'" + ts,
-    log.defectType || "",
-    log.note || "",
-    log.actionTaken || "",
-    photoVal
-  ];
-  
-  sheet.getRange(nextRow, 1, 1, 7).setValues([rowValues]);
-  return nextRow;
-}
-
-function getRobotObjects(ss) {
-  if (!ss) {
-    ss = SpreadsheetApp.getActiveSpreadsheet();
-  }
-  if (!ss) return [];
-  const sheet = ss.getSheetByName("로봇 오브젝트");
-  if (!sheet) return [];
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return [];
-  
-  const lastCol = Math.max(sheet.getLastColumn(), 5);
-  const range = sheet.getRange(1, 1, lastRow, lastCol); // Row 1 onwards to read headers dynamically
-  const values = range.getValues();
-  
-  // Dynamic header parsing to identify the correct column index for each property
-  const headers = values[0].map(function(h) {
-    return String(h || "").trim().toLowerCase();
-  });
-  
-  var nameColIdx = -1;
-  var idColIdx = -1;
-  var locColIdx = -1;
-  var specColIdx = -1;
-  var noteColIdx = -1;
-  
-  for (var j = 0; j < headers.length; j++) {
-    var h = headers[j];
-    if (!h) continue;
-    // Look for name/품목명/제품명 column
-    if (h === "name" || h.indexOf("품목") !== -1 || h.indexOf("제품") !== -1 || h === "이름" || h === "오브젝트" || h === "명칭") {
-      nameColIdx = j;
-    } else if (h === "id" || h === "코드" || h === "번호" || h.indexOf("아이디") !== -1) {
-      idColIdx = j;
-    } else if (h.indexOf("위치") !== -1 || h.indexOf("구역") !== -1 || h.indexOf("장소") !== -1 || h.indexOf("location") !== -1) {
-      locColIdx = j;
-    } else if (h.indexOf("규격") !== -1 || h.indexOf("서브") !== -1 || h.indexOf("spec") !== -1) {
-      specColIdx = j;
-    } else if (h.indexOf("비고") !== -1 || h.indexOf("메모") !== -1 || h.indexOf("note") !== -1 || h.indexOf("설명") !== -1) {
-      noteColIdx = j;
-    }
-  }
-  
-  // Fallback default indices if header name did not match
-  if (nameColIdx === -1) {
-    nameColIdx = (idColIdx === 0) ? 1 : 0;
-  }
-  if (idColIdx === -1) {
-    idColIdx = (nameColIdx === 0) ? 1 : 0;
-  }
-  if (locColIdx === -1) locColIdx = 2;
-  if (specColIdx === -1) specColIdx = 3;
-  if (noteColIdx === -1) noteColIdx = 4;
-
-  const objects = [];
-  // Row indices are 1-based, starting with row 2 (index 1 of values array)
-  for (var i = 1; i < values.length; i++) {
-    const row = values[i];
-    const rawName = nameColIdx < row.length ? String(row[nameColIdx] || "").trim() : "";
-    const rawId = idColIdx < row.length ? String(row[idColIdx] || "").trim() : "";
-    if (!rawName && !rawId) continue;
-    
-    objects.push({
-      rowIndex: i + 1,
-      name: rawName || rawId, // fallback to ID if name is empty
-      id: rawId,
-      location: locColIdx < row.length ? String(row[locColIdx] || "로봇 구역").trim() : "로봇 구역",
-      spec: specColIdx < row.length ? String(row[specColIdx] || "").trim() : "",
-      note: noteColIdx < row.length ? String(row[noteColIdx] || "").trim() : "",
-      stock: "N/A"
-    });
-  }
-  return objects;
-}
-
-function getRentLogs(sheet) {
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return [];
-  
-  const range = sheet.getRange(2, 1, lastRow - 1, 7);
-  const values = range.getValues();
-  const displayValues = range.getDisplayValues();
-  const logs = [];
-  for (let i = 0; i < values.length; i++) {
-    const row = values[i];
-    logs.push({
-      rowIndex: i + 2,
-      timestamp: displayValues[i][0] || "",
-      type: String(row[1] || "대여").trim(),
-      location: String(row[2] || "").trim(),
-      name: String(row[3] || "").trim(),
-      qty: row[4] === "" ? 0 : Number(row[4]),
-      user: String(row[5] || "").trim(),
-      note: String(row[6] || "").trim()
-    });
-  }
-  return logs;
-}
-
-function addRentLog(sheet, log) {
-  const lastRow = sheet.getLastRow();
-  const nextRow = lastRow + 1;
-  
-  const nowStr = formatDate(new Date());
-  const ts = log.timestamp || nowStr;
-  const rowValues = [
-    ts.indexOf("'") === 0 ? ts : "'" + ts,
-    log.type || "대여",
-    log.location || "",
-    log.name || "",
-    log.qty === "" || log.qty == null ? 0 : Number(log.qty),
-    log.user || "",
-    log.note || ""
-  ];
-  
-  sheet.getRange(nextRow, 1, 1, 7).setValues([rowValues]);
-  return nextRow;
-}
-
-function addInventoryItem(sheet, item) {
-  const lastRow = sheet.getLastRow();
-  const nextRow = lastRow + 1;
-  const nowStr = formatDate(new Date());
-  
-  const rowValues = [
-    item.location || "",
-    item.spec || "", // Column B (서브 분류)
-    item.name || "",
-    item.link || "",
-    item.stock === "" || item.stock == null ? "" : Number(item.stock),
-    nowStr,
-    item.manager || "",
-    item.note || "",
-    item.photo || "" // Column I (사진 링크용)
-  ];
-  
-  sheet.getRange(nextRow, 1, 1, 9).setValues([rowValues]);
-  return nextRow;
-}
-
-function updateInventoryItem(sheet, item) {
-  const rowIndex = Number(item.rowIndex);
-  if (!rowIndex || rowIndex < 2) throw new Error("올바르지 않은 행 인덱스: " + rowIndex);
-  
-  const nowStr = formatDate(new Date());
-  const range = sheet.getRange(rowIndex, 1, 1, 9);
-  const currentValues = range.getValues()[0];
-  
-  if (item.location !== undefined) currentValues[0] = item.location;
-  if (item.spec !== undefined) currentValues[1] = item.spec; // Column B (서브 분류)
-  if (item.photo !== undefined) {
-    currentValues[8] = item.photo; // Column I (사진 링크용)만 업데이트합니다.
-  }
-  if (item.name !== undefined) currentValues[2] = item.name;
-  if (item.link !== undefined) currentValues[3] = item.link;
-  if (item.stock !== undefined) currentValues[4] = (item.stock === "" || item.stock == null) ? "" : Number(item.stock);
-  currentValues[5] = nowStr;
-  if (item.manager !== undefined) currentValues[6] = item.manager;
-  if (item.note !== undefined) currentValues[7] = item.note;
-  
-  range.setValues([currentValues]);
-}
-
-function deleteInventoryItem(sheet, rowIndex) {
-  const idx = Number(rowIndex);
-  if (!idx || idx < 2) throw new Error("올바르지 않은 행 인덱스: " + idx);
-  sheet.deleteRow(idx);
-}
-
-function getSectorLayout() {
-  const scriptProperties = PropertiesService.getScriptProperties();
-  const data = scriptProperties.getProperty("sector_layout");
-  if (!data) return [];
-  try {
-    return JSON.parse(data);
-  } catch (e) {
-    return [];
-  }
-}
-
-function saveSectorLayout(sectors) {
-  const scriptProperties = PropertiesService.getScriptProperties();
-  scriptProperties.setProperty("sector_layout", JSON.stringify(sectors));
-}
-
-function deleteSector(sectorId) {
-  const scriptProperties = PropertiesService.getScriptProperties();
-  const data = scriptProperties.getProperty("sector_layout");
-  if (!data) return;
-  try {
-    let sectors = JSON.parse(data);
-    sectors = sectors.filter(function(s) { return s.id !== sectorId; });
-    scriptProperties.setProperty("sector_layout", JSON.stringify(sectors));
-  } catch (e) {}
-}
-
-function getUsersData(sheet) {
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return [{ id: "admin", password: "1234", name: "관리자" }];
-  
-  const range = sheet.getRange(2, 1, lastRow - 1, 3);
-  const values = range.getValues();
-  const users = [];
-  for (let i = 0; i < values.length; i++) {
-    const row = values[i];
-    const idVal = String(row[0] || "").trim();
-    if (idVal) {
-      users.push({
-        id: idVal,
-        password: String(row[1] || "").trim(),
-        name: String(row[2] || "").trim()
-      });
-    }
-  }
-  return users;
-}
-
-function formatDate(date) {
-  try {
-    const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
-    return Utilities.formatDate(date, tz, "yyyy-MM-dd HH:mm:ss");
-  } catch (err) {
-    const pad = function(n) { return String(n).padStart(2, "0"); };
-    return date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate()) + " " + pad(date.getHours()) + ":" + pad(date.getMinutes()) + ":" + pad(date.getSeconds());
-  }
-}
-
-function responseJSON(obj) {
-  return ContentService.createTextOutput(JSON.stringify(obj))
-    .setMimeType(ContentService.MimeType.JSON);
-}
-
-function testDrivePermission() {
-  try {
-    const folders = DriveApp.getFoldersByName("Image for Broken Item");
-    if (folders.hasNext()) {
-      Logger.log("성공: 구글 드라이브 권한이 정상 승인되었습니다! 기존 폴더를 감지했습니다.");
-    } else {
-      const folder = DriveApp.createFolder("Image for Broken Item");
-      Logger.log("성공: 구글 드라이브 권한이 정상 승인되었습니다! 새 폴더를 생성했습니다.");
-    }
-  } catch (e) {
-    Logger.log("실패: 권한 승인 중 오류가 발생했습니다. 에러: " + e.toString());
-  }
-}
-`;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(scriptCode);
@@ -708,7 +137,7 @@ function testDrivePermission() {
               위의 <b>[코드 복사하기]</b> 버튼을 눌러 복사한 스크립트를 전체 붙여넣기합니다.
             </li>
             <li>
-              코드 상단의 <span className="mono" style={{ color: TEXT_MAIN }}>INVENTORY_SHEET_NAME</span> 값을 실제 시트 탭 이름(예: "시트1")으로 수정하고 저장합니다.
+              <span style={{ color: OK, fontWeight: "bold" }}>[업데이트 완료 - 시트명 자동 감지]</span> 이제 스크립트 상단의 <span className="mono" style={{ color: TEXT_MAIN }}>INVENTORY_SHEET_NAME</span>(시트명)을 수동으로 고칠 필요가 없습니다! 스크립트가 스프레드시트 내 "관리시트", "시트1", "Sheet1" 또는 "재고", "인벤토리" 단어가 들어간 탭을 자동으로 찾아 연동합니다.
             </li>
             <li>
               <b>[구글 드라이브 권한(DriveApp) 승인 팝업 띄우기 (필수)]</b>: 에디터 화면 상단 툴바의 함수 선택 창(기본값: doGet)에서 <b style={{ color: OK }}>testDrivePermission</b>을 선택한 뒤, 바로 왼쪽의 <b style={{ color: OK }}>실행(Run)</b> 단추를 누릅니다.
@@ -759,7 +188,52 @@ function testDrivePermission() {
             연동을 위해서는 스프레드시트 자체가 아닌, 스프레드시트 내 <b>[확장 프로그램] → [Apps Script]</b>에서 복사한 코드를 넣고 <b>[배포]</b>하여 발급받은 <b>웹 앱 URL(https://script.google.com/macros/s/.../exec)</b>을 입력해 주세요. (위의 설치 가이드를 클릭해 상세 설명을 확인하세요!)
           </div>
         )}
-        {connectError && <div style={{ fontSize: 12, color: DANGER, marginBottom: 8, whiteSpace: "pre-line" }}>{connectError}</div>}
+        {connectError && (
+          <div style={{ marginTop: 12, marginBottom: 16 }}>
+            <div style={{ fontSize: 12, color: DANGER, marginBottom: 10, whiteSpace: "pre-line", background: "rgba(239, 68, 68, 0.08)", padding: 12, borderRadius: 6, border: "1px solid rgba(239, 68, 68, 0.3)" }}>
+              ❌ {connectError}
+            </div>
+            
+            <details style={{ background: "rgba(30, 41, 59, 0.7)", border: `1px solid ${PANEL_BORDER}`, borderRadius: 8, padding: 12 }} open>
+              <summary style={{ cursor: "pointer", fontSize: 12.5, color: ACCENT, fontWeight: 700, outline: "none" }}>
+                🔍 연동 실패 시 5가지 체크리스트 (자가 진단 및 해결 가이드)
+              </summary>
+              <div style={{ marginTop: 10, fontSize: 12, color: TEXT_DIM, lineHeight: "1.7", display: "flex", flexDirection: "column", gap: 12 }}>
+                <div>
+                  <b style={{ color: "#f1f5f9" }}>① 웹앱 URL 형식 확인 (가장 흔한 실수!)</b>
+                  <br />
+                  복사하신 주소 끝이 반드시 <code style={{ color: OK, background: "#0f172a", padding: "1px 4px", borderRadius: 3 }}>/exec</code>로 끝나야 합니다. 만약 주소 끝이 <code style={{ color: DANGER, background: "#0f172a", padding: "1px 4px", borderRadius: 3 }}>/dev</code>로 끝난다면 그것은 임시 테스트용 주소이므로 본인 외에는 접속이 차단되어 CORS 오류가 발생합니다. <b style={{ color: OK }}>[배포] → [새 배포]</b>를 눌러 새 웹앱 주소를 발급받으세요.
+                </div>
+                
+                <div>
+                  <b style={{ color: "#f1f5f9" }}>② 회사 / 학교 (Google Workspace) 계정의 특수 보안 정책 우회법</b>
+                  <br />
+                  단체/기업용 구글 계정은 보안 정책 상 외부 서비스 연동이 사전에 전면 차단되어 있을 수 있습니다.
+                  <br />
+                  <span style={{ color: OK, fontWeight: "bold" }}>💡 초간단 해결책:</span> 개인 구글 계정(<code style={{ color: OK }}>@gmail.com</code>)으로 새 구글 시트를 만들어 거기서 Apps Script를 배포하세요. 배포 완료 후 해당 스프레드시트를 본인의 <b>회사/학교 계정으로 공유(편집자 권한)</b>하시면, 사내 업무 계정에서 완벽하게 모니터링 및 실시간 동시 관리가 가능합니다!
+                </div>
+                
+                <div>
+                  <b style={{ color: "#f1f5f9" }}>③ 액세스할 수 있는 사람 '모든 사람(Anyone)' 지정 누락</b>
+                  <br />
+                  Apps Script 웹앱 배포 설정창에서 <b style={{ color: "#f1f5f9" }}>'액세스할 수 있는 사람(Who has access)'</b> 항목을 <b style={{ color: OK }}>'모든 사람(Anyone)'</b>으로 변경하셨는지 확인하세요. '나(Only myself)'나 '조직원(Anyone within organization)'으로 되어 있으면 외부 브라우저 통신이 모두 차단됩니다.
+                </div>
+                
+                <div>
+                  <b style={{ color: "#f1f5f9" }}>④ 구글 드라이브(사진 업로드용) 권한 승인 누락</b>
+                  <br />
+                  Apps Script 에디터 화면 상단의 실행 버튼 왼쪽 드롭다운에서 <b style={{ color: OK }}>testDrivePermission</b>을 선택하고 <b style={{ color: OK }}>실행(Run)</b>을 꼭 1회 이상 수동으로 눌러 팝업에서 <b>[고급] → [이동] → [허용]</b> 단계까지 모두 통과해주셔야 데이터 업로드가 작동합니다.
+                </div>
+                
+                <div>
+                  <b style={{ color: "#f1f5f9" }}>⑤ 스크립트 수정 후 '새 버전' 배포 업데이트 누락</b>
+                  <br />
+                  Apps Script 에디터에서 코드를 붙여넣고 저장한 뒤에 <b>[배포 관리] → [수정] → 버전을 반드시 '새 버전(New Version)'으로 선택 및 배포</b>하거나 <b>[새 배포]</b>를 다시 생성해주셔야 구글 서버에 변경된 코드가 최종 반영됩니다. 그냥 저장(디스크 아이콘)만 누르면 반영되지 않습니다.
+                </div>
+              </div>
+            </details>
+          </div>
+        )}
 
         <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
           <button

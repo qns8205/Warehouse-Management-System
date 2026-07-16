@@ -2,7 +2,7 @@ import React, { useState, useMemo } from "react";
 import { InventoryItem, DefectLog } from "../types";
 import { AlertTriangle, Calendar, User, MapPin, Clipboard, Plus, Search, ArrowLeft, FileText, Check, Camera, Upload, X, ImageIcon } from "lucide-react";
 
-import { isFuzzyMatch } from "../utils/drive";
+import { isFuzzyMatch, resizeAndCompressImage } from "../utils/drive";
 import { parseDateString } from "../utils/date";
 
 interface DefectLogsPageProps {
@@ -130,28 +130,16 @@ export default function DefectLogsPage({
   const [isDragging, setIsDragging] = useState(false);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
 
-  // Read image file as original Base64 (No quality/resolution loss)
-  const readAsBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = (err) => reject(err);
-      reader.readAsDataURL(file);
-    });
-  };
-
   const processAndUploadFile = async (file: File) => {
     try {
       setIsUploadingImage(true);
       setFormError(null);
       
-      // Read original image as base64 (Guarantees original high-resolution)
-      const rawBase64 = await readAsBase64(file);
+      // Automatically resize to max 1200px width/height and compress to 0.75 JPEG quality
+      // This prevents payload limit or timeout errors during sync
+      const compressedBase64 = await resizeAndCompressImage(file, 1200, 1200, 0.75);
       
-      // Keep the original base64 raw string for Google Drive upload.
-      // It will be sent via Apps Script API (addDefectLog) and converted to a permanent 
-      // direct drive link on the server.
-      setPhotoInput(rawBase64);
+      setPhotoInput(compressedBase64);
     } catch (err: any) {
       console.error("Image processing error:", err);
       setFormError(`이미지 처리 실패. (에러: ${err.message || err})`);

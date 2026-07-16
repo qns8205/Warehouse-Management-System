@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { InventoryItem, Rack } from "../types";
-import { parseLocation } from "../utils/drive";
+import { parseLocation, resizeAndCompressImage } from "../utils/drive";
 import { Upload, X, Camera, ImageIcon } from "lucide-react";
 
 interface ItemFormModalProps {
@@ -46,7 +46,7 @@ export default function ItemFormModal({
 
   const [form, setForm] = useState<Omit<InventoryItem, "rowIndex"> & { rowIndex?: number }>(
     item
-      ? { ...item, manager: defaultManager || item.manager || "관리자" }
+      ? { ...item, manager: item.manager || defaultManager || "관리자" }
       : {
           location: "",
           photo: "",
@@ -69,20 +69,13 @@ export default function ItemFormModal({
   const [isDragging, setIsDragging] = useState(false);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
 
-  const readAsBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = (err) => reject(err);
-      reader.readAsDataURL(file);
-    });
-  };
-
   const processAndUploadFile = async (file: File) => {
     try {
       setIsUploadingImage(true);
-      const rawBase64 = await readAsBase64(file);
-      update("photo", rawBase64);
+      // Automatically resize to max 1200px width/height and compress to 0.75 JPEG quality
+      // This prevents payload limit or timeout errors during sync
+      const compressedBase64 = await resizeAndCompressImage(file, 1200, 1200, 0.75);
+      update("photo", compressedBase64);
     } catch (err: any) {
       console.error("Image processing error:", err);
       alert(`이미지 처리 실패: ${err.message || err}`);

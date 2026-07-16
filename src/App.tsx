@@ -102,34 +102,98 @@ const DEMO_ROBOT_OBJECTS = [
 ];
 
 /* ============================================================
+   로컬 스토리지 안전 저장 및 복원 함수
+   ============================================================ */
+function safeSetLocalStorage(key: string, value: string) {
+  try {
+    // 특정 캐시 값에 대용량 base64 데이터(예: 사진 업로드)가 들어있으면,
+    // 브라우저 5MB 제한(QuotaExceededError)을 방지하기 위해 base64 부분을 생략/압축하여 캐싱합니다.
+    if (key === "wms_cached_defect_logs" || key === "wms_cached_inventory") {
+      try {
+        const parsed = JSON.parse(value);
+        if (Array.isArray(parsed)) {
+          let modified = false;
+          const cleaned = parsed.map((item: any) => {
+            if (item && item.photo && typeof item.photo === "string" && item.photo.startsWith("data:image/")) {
+              modified = true;
+              return {
+                ...item,
+                photo: "(대용량 이미지 캐시 생략 - 스프레드시트에는 정상 업로드됨)"
+              };
+            }
+            return item;
+          });
+          if (modified) {
+            value = JSON.stringify(cleaned);
+          }
+        }
+      } catch (err) {
+        console.warn("로컬 캐시 데이터 최적화 실패:", err);
+      }
+    }
+    localStorage.setItem(key, value);
+  } catch (error) {
+    console.error(`[LocalStorage Warning] '${key}' 저장 실패 (용량 초과 혹은 브라우저 보안 제한):`, error);
+  }
+}
+
+/* ============================================================
    메인 컴포넌트 (창고 구역 관리 및 구글 스프레드시트 실시간 연동)
    ============================================================ */
 export default function App() {
   // 1. 상태 선언
   const [currentView, setCurrentView] = useState<"landing" | "login" | "rental" | "monitor" | "defect" | "rent">("login");
   const [users, setUsers] = useState<WmsUser[]>(() => {
-    const cached = localStorage.getItem("wms_cached_users");
-    return cached ? JSON.parse(cached) : [{ id: "admin", password: "1234" }];
+    try {
+      const cached = localStorage.getItem("wms_cached_users");
+      return cached ? JSON.parse(cached) : [{ id: "admin", password: "1234" }];
+    } catch (e) {
+      console.error("Failed to load cached users:", e);
+      return [{ id: "admin", password: "1234" }];
+    }
   });
   const [defectLogs, setDefectLogs] = useState<DefectLog[]>(() => {
-    const cached = localStorage.getItem("wms_cached_defect_logs");
-    return cached ? JSON.parse(cached) : DEMO_DEFECT_LOGS;
+    try {
+      const cached = localStorage.getItem("wms_cached_defect_logs");
+      return cached ? JSON.parse(cached) : DEMO_DEFECT_LOGS;
+    } catch (e) {
+      console.error("Failed to load cached defect logs:", e);
+      return DEMO_DEFECT_LOGS;
+    }
   });
   const [robotObjects, setRobotObjects] = useState<any[]>(() => {
-    const cached = localStorage.getItem("wms_cached_robot_objects");
-    return cached ? JSON.parse(cached) : DEMO_ROBOT_OBJECTS;
+    try {
+      const cached = localStorage.getItem("wms_cached_robot_objects");
+      return cached ? JSON.parse(cached) : DEMO_ROBOT_OBJECTS;
+    } catch (e) {
+      console.error("Failed to load cached robot objects:", e);
+      return DEMO_ROBOT_OBJECTS;
+    }
   });
   const [rentLogs, setRentLogs] = useState<RentLog[]>(() => {
-    const cached = localStorage.getItem("wms_cached_rent_logs");
-    return cached ? JSON.parse(cached) : DEMO_RENT_LOGS;
+    try {
+      const cached = localStorage.getItem("wms_cached_rent_logs");
+      return cached ? JSON.parse(cached) : DEMO_RENT_LOGS;
+    } catch (e) {
+      console.error("Failed to load cached rent logs:", e);
+      return DEMO_RENT_LOGS;
+    }
   });
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
-    const cached = localStorage.getItem("wms_is_admin");
-    return cached === "true"; // 기본은 false (대여/조회 모드)
+    try {
+      const cached = localStorage.getItem("wms_is_admin");
+      return cached === "true"; // 기본은 false (대여/조회 모드)
+    } catch {
+      return false;
+    }
   });
   const [currentUser, setCurrentUser] = useState<WmsUser | null>(() => {
-    const cached = localStorage.getItem("wms_current_user");
-    return cached ? JSON.parse(cached) : null;
+    try {
+      const cached = localStorage.getItem("wms_current_user");
+      return cached ? JSON.parse(cached) : null;
+    } catch {
+      return null;
+    }
   });
   const [showRentModal, setShowRentModal] = useState<{ item: InventoryItem; actionType: "대여" | "반납" | "소모" } | null>(null);
   const [modalActionType, setModalActionType] = useState<"대여" | "반납" | "소모">("대여");
@@ -185,8 +249,8 @@ export default function App() {
       const params = new URLSearchParams(window.location.search);
       const queryUrl = params.get("script_url");
       if (queryUrl) {
-        localStorage.setItem("wms_script_url", queryUrl);
-        localStorage.setItem("wms_connected", "true");
+        safeSetLocalStorage("wms_script_url", queryUrl);
+        safeSetLocalStorage("wms_connected", "true");
         return queryUrl;
       }
     }
@@ -195,7 +259,7 @@ export default function App() {
       saved === "https://script.google.com/macros/s/AKfycbwc5YXabteLtTakGJqNo74AHD_AchtBw1bLlXEBiwmyk7CVdKsesrqSx8FZMOM1LrhuYQ/exec" ||
       saved === "https://script.google.com/macros/s/AKfycby5Way2Bq9NEqxv96yDsKwgCmNw-MLh0ms0Z8XlTKEcjw4n0j4L_xPUEN42RNQDqQ686A/exec"
     ) {
-      localStorage.setItem("wms_script_url", DEFAULT_SCRIPT_URL);
+      safeSetLocalStorage("wms_script_url", DEFAULT_SCRIPT_URL);
       return DEFAULT_SCRIPT_URL;
     }
     return saved || DEFAULT_SCRIPT_URL;
@@ -239,7 +303,7 @@ export default function App() {
   const toggleLightMode = () => {
     setIsLightMode((prev) => {
       const next = !prev;
-      localStorage.setItem("wms_light_mode", String(next));
+      safeSetLocalStorage("wms_light_mode", String(next));
       return next;
     });
   };
@@ -309,8 +373,8 @@ export default function App() {
       const params = new URLSearchParams(window.location.search);
       const queryUrl = params.get("script_url");
       if (queryUrl) {
-        localStorage.setItem("wms_script_url", queryUrl);
-        localStorage.setItem("wms_connected", "true");
+        safeSetLocalStorage("wms_script_url", queryUrl);
+        safeSetLocalStorage("wms_connected", "true");
         isRestored = true;
         
         // 주소창에서 파라미터를 제거하여 깔끔하게 세팅
@@ -324,10 +388,10 @@ export default function App() {
     }
 
     if (!localStorage.getItem("wms_script_url")) {
-      localStorage.setItem("wms_script_url", scriptUrl);
+      safeSetLocalStorage("wms_script_url", scriptUrl);
     }
     if (localStorage.getItem("wms_connected") === null) {
-      localStorage.setItem("wms_connected", String(connected));
+      safeSetLocalStorage("wms_connected", String(connected));
     }
 
     if (isRestored) {
@@ -364,30 +428,30 @@ export default function App() {
   // 랙 정보가 변경될 때마다 캐시에 저장
   useEffect(() => {
     if (racks.length > 0) {
-      localStorage.setItem("wms_cached_racks", JSON.stringify(racks));
+      safeSetLocalStorage("wms_cached_racks", JSON.stringify(racks));
     }
   }, [racks]);
 
   useEffect(() => {
     if (inventory.length > 0) {
-      localStorage.setItem("wms_cached_inventory", JSON.stringify(inventory));
+      safeSetLocalStorage("wms_cached_inventory", JSON.stringify(inventory));
     }
   }, [inventory]);
 
   useEffect(() => {
     if (defectLogs.length > 0) {
-      localStorage.setItem("wms_cached_defect_logs", JSON.stringify(defectLogs));
+      safeSetLocalStorage("wms_cached_defect_logs", JSON.stringify(defectLogs));
     }
   }, [defectLogs]);
 
   useEffect(() => {
     if (rentLogs.length > 0) {
-      localStorage.setItem("wms_cached_rent_logs", JSON.stringify(rentLogs));
+      safeSetLocalStorage("wms_cached_rent_logs", JSON.stringify(rentLogs));
     }
   }, [rentLogs]);
 
   useEffect(() => {
-    localStorage.setItem("wms_is_admin", String(isAdmin));
+    safeSetLocalStorage("wms_is_admin", String(isAdmin));
   }, [isAdmin]);
 
   /* ---------------- Apps Script API 연동 로직 ---------------- */
@@ -402,7 +466,7 @@ export default function App() {
         body: JSON.stringify({ action, payload }),
       });
     } catch (e: any) {
-      throw new Error(`스프레드시트 서버 연결 실패: ${e.message}. 네트워크 상태나 CORS 설정을 확인하세요.`);
+      throw new Error(`스프레드시트 서버 연결 실패: ${e.message}.\n\n[체크리스트]\n1. 구글 Apps Script 배포 시 '액세스 권한이 있는 사용자'가 '모든 사용자(Anyone)'로 되어 있는지 확인해 주세요.\n2. 등록하신 URL이 스프레드시트 주소가 아니라 '/exec'로 끝나는 웹앱 URL인지 확인해 주세요.\n3. 회사/학교 계정의 경우 외부 외부망 접근 정책을 확인해 주세요.`);
     }
     
     const text = await res.text();
@@ -431,7 +495,7 @@ export default function App() {
     try {
       res = await fetch(`${scriptUrl}?action=getAll`);
     } catch (e: any) {
-      throw new Error(`스프레드시트 연결 실패: ${e.message}`);
+      throw new Error(`스프레드시트 연결 실패: ${e.message}.\n\n[체크리스트]\n1. 구글 Apps Script 배포 시 '액세스 권한이 있는 사용자'가 '모든 사용자(Anyone)'로 되어 있는지 확인해 주세요.\n2. 등록하신 URL이 스프레드시트 주소가 아니라 '/exec'로 끝나는 웹앱 URL인지 확인해 주세요.\n3. 회사/학교 계정의 경우 외부 외부망 접근 정책을 확인해 주세요.`);
     }
     
     const text = await res.text();
@@ -480,14 +544,14 @@ export default function App() {
       }
       if (data.robotObjects) {
         setRobotObjects(data.robotObjects);
-        localStorage.setItem("wms_cached_robot_objects", JSON.stringify(data.robotObjects));
+        safeSetLocalStorage("wms_cached_robot_objects", JSON.stringify(data.robotObjects));
       }
       if (data.rentLogs) {
         setRentLogs(data.rentLogs);
       }
       if (data.users && data.users.length > 0) {
         setUsers(data.users);
-        localStorage.setItem("wms_cached_users", JSON.stringify(data.users));
+        safeSetLocalStorage("wms_cached_users", JSON.stringify(data.users));
       }
       setLastSync(new Date());
     } catch (e) {
@@ -578,7 +642,7 @@ export default function App() {
 
       if (data.robotObjects) {
         setRobotObjects(data.robotObjects);
-        localStorage.setItem("wms_cached_robot_objects", JSON.stringify(data.robotObjects));
+        safeSetLocalStorage("wms_cached_robot_objects", JSON.stringify(data.robotObjects));
       }
 
       if (data.rentLogs) {
@@ -587,13 +651,13 @@ export default function App() {
 
       if (data.users && data.users.length > 0) {
         setUsers(data.users);
-        localStorage.setItem("wms_cached_users", JSON.stringify(data.users));
+        safeSetLocalStorage("wms_cached_users", JSON.stringify(data.users));
       }
 
       // 로컬 스토리지에 연동 정보 저장
-      localStorage.setItem("wms_script_url", scriptUrl.trim());
-      localStorage.setItem("wms_connected", "true");
-      localStorage.setItem("wms_last_sync", new Date().toISOString());
+      safeSetLocalStorage("wms_script_url", scriptUrl.trim());
+      safeSetLocalStorage("wms_connected", "true");
+      safeSetLocalStorage("wms_last_sync", new Date().toISOString());
 
       setConnected(true);
       setShowSetup(false);
@@ -629,10 +693,10 @@ export default function App() {
       }
       if (data.users && data.users.length > 0) {
         setUsers(data.users);
-        localStorage.setItem("wms_cached_users", JSON.stringify(data.users));
+        safeSetLocalStorage("wms_cached_users", JSON.stringify(data.users));
       }
       setLastSync(new Date());
-      localStorage.setItem("wms_last_sync", new Date().toISOString());
+      safeSetLocalStorage("wms_last_sync", new Date().toISOString());
       setDirty(false);
       showToast("실시간 스프레드시트 동기화 완료!", "ok");
     } catch (err: any) {
@@ -661,7 +725,7 @@ export default function App() {
       }));
       await callScript("saveSectorLayout", { sectors });
       setLastSync(new Date());
-      localStorage.setItem("wms_last_sync", new Date().toISOString());
+      safeSetLocalStorage("wms_last_sync", new Date().toISOString());
       setDirty(false);
     } catch (err: any) {
       showToast("배치 저장 실패: " + err.message, "error");
@@ -1013,7 +1077,7 @@ export default function App() {
           const data = await fetchAll();
           setInventory(mergePendingStocks(data.inventory || []));
           setLastSync(new Date());
-          localStorage.setItem("wms_last_sync", new Date().toISOString());
+          safeSetLocalStorage("wms_last_sync", new Date().toISOString());
           showToast(isNew ? "✅ 신규 품목 동기화 완료" : "✅ 품목 스펙 동기화 완료", "ok");
         })
         .catch((err: any) => {
@@ -1144,7 +1208,7 @@ export default function App() {
           const data = await fetchAll();
           setInventory(mergePendingStocks(data.inventory || []));
           setLastSync(new Date());
-          localStorage.setItem("wms_last_sync", new Date().toISOString());
+          safeSetLocalStorage("wms_last_sync", new Date().toISOString());
           showToast("✅ 구글 스프레드시트 삭제 반영 완료", "ok");
         })
         .catch((err: any) => {
@@ -1173,12 +1237,12 @@ export default function App() {
     if (connected) {
       callScript("addDefectLog", log)
         .then((res) => {
-          // 실시간으로 받은 올바른 rowIndex로 교체
+          // 실시간으로 받은 올바른 rowIndex와 구글 드라이브 이미지 URL로 교체 (대용량 base64 데이터 제거 및 최적화)
           setDefectLogs((prev) =>
-            prev.map((l) => (l.rowIndex === tempIndex ? { ...l, rowIndex: res.rowIndex } : l))
+            prev.map((l) => (l.rowIndex === tempIndex ? { ...l, rowIndex: res.rowIndex, photo: res.photo || l.photo } : l))
           );
           setLastSync(new Date());
-          localStorage.setItem("wms_last_sync", new Date().toISOString());
+          safeSetLocalStorage("wms_last_sync", new Date().toISOString());
           showToast("✅ 불량 로그 스프레드시트 기록 완료", "ok");
         })
         .catch((err: any) => {
@@ -1254,7 +1318,7 @@ export default function App() {
       callScript("rentInventoryItem", log)
         .then(() => {
           setLastSync(new Date());
-          localStorage.setItem("wms_last_sync", new Date().toISOString());
+          safeSetLocalStorage("wms_last_sync", new Date().toISOString());
           showToast("스프레드시트에 실시간 동기화 완료!", "ok");
           // 성공 후 구글 시트가 갱신 및 계산 완료될 충분한 시간을 준 후 pending 해제 (2.5초 지연)
           if (rIndex !== undefined && pendingUpdates.current[rIndex]) {
@@ -1302,7 +1366,7 @@ export default function App() {
       callScript("updateInventoryItem", { rowIndex: item.rowIndex, stock: nextStock, manager: currentUserName })
         .then(() => {
           setLastSync(new Date());
-          localStorage.setItem("wms_last_sync", new Date().toISOString());
+          safeSetLocalStorage("wms_last_sync", new Date().toISOString());
           // 구글 시트 반영 시간 고려 2.5초 지연 후 만료 조정
           if (pendingUpdates.current[item.rowIndex]) {
             pendingUpdates.current[item.rowIndex].expiry = Date.now() + 2500;
@@ -1337,7 +1401,7 @@ export default function App() {
         onConnect={handleConnect}
         onDisconnect={() => {
           localStorage.removeItem("wms_script_url");
-          localStorage.setItem("wms_connected", "false");
+          safeSetLocalStorage("wms_connected", "false");
           setConnected(false);
           setScriptUrl("");
           showToast("스프레드시트 연동이 해제되었습니다. 가상 데모 모드로 동작합니다.", "info");
@@ -1353,9 +1417,9 @@ export default function App() {
         users={users}
         onLoginSuccess={(user) => {
           setCurrentUser(user);
-          localStorage.setItem("wms_current_user", JSON.stringify(user));
+          safeSetLocalStorage("wms_current_user", JSON.stringify(user));
           setIsAdmin(true);
-          localStorage.setItem("wms_is_admin", "true");
+          safeSetLocalStorage("wms_is_admin", "true");
           setCurrentView("monitor");
           if (isMobile) {
             showToast(`📱 모바일 관리자(${user.name || user.id}) 로그인 성공!`, "ok");
@@ -1365,7 +1429,7 @@ export default function App() {
         }}
         onViewOnlyMode={() => {
           setIsAdmin(false);
-          localStorage.setItem("wms_is_admin", "false");
+          safeSetLocalStorage("wms_is_admin", "false");
           setCurrentUser(null);
           setCurrentView("monitor");
           showToast("열람용 모드(조회 전용)로 진입했습니다. 수정이 차단됩니다.", "ok");
@@ -1411,7 +1475,7 @@ export default function App() {
         onSaveInventoryItem={saveInventoryItem}
         onBack={() => {
           setIsAdmin(false);
-          localStorage.setItem("wms_is_admin", "false");
+          safeSetLocalStorage("wms_is_admin", "false");
           setCurrentUser(null);
           setCurrentView("login");
         }}
@@ -2278,7 +2342,7 @@ export default function App() {
           onClose={() => setShowSetup(false)}
           onDisconnect={() => {
             localStorage.removeItem("wms_script_url");
-            localStorage.setItem("wms_connected", "false");
+            safeSetLocalStorage("wms_connected", "false");
             setConnected(false);
             setScriptUrl("");
             setShowSetup(false);

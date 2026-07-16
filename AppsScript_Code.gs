@@ -1,18 +1,55 @@
 // AppsScript_Code.gs
 // 이 코드를 구글 스프레드시트의 [확장 프로그램] -> [Apps Script]에 붙여넣고 웹앱으로 배포하세요.
 
-const INVENTORY_SHEET_NAME = "관리시트"; // 실제 사용 중인 스프레드시트의 시트 탭 이름으로 변경하세요.
 const DEFECT_SHEET_NAME = "불량로그";
 const RENT_SHEET_NAME = "대여로그";
 const USERS_SHEET_NAME = "Users"; // ID와 패스워드가 저장될 시트 탭 이름입니다.
+
+// 스마트 시트 찾기 함수: "관리시트", "시트1", "Sheet1" 순서로 시트를 시도하고,
+// 검색어가 매칭되는 시트가 없으면 첫 번째 시트를 자동으로 매칭하여 오류를 예방합니다.
+function getInventorySheet(ss) {
+  if (!ss) {
+    ss = SpreadsheetApp.getActiveSpreadsheet();
+  }
+  if (!ss) return null;
+  
+  // 1. "관리시트" 검색
+  var sheet = ss.getSheetByName("관리시트");
+  if (sheet) return sheet;
+  
+  // 2. "시트1" 검색
+  sheet = ss.getSheetByName("시트1");
+  if (sheet) return sheet;
+  
+  // 3. "Sheet1" 검색
+  sheet = ss.getSheetByName("Sheet1");
+  if (sheet) return sheet;
+  
+  // 4. "재고", "인벤토리", "물품", "관리", "품목", "inventory" 단어가 들어간 시트 찾기
+  var sheets = ss.getSheets();
+  for (var i = 0; i < sheets.length; i++) {
+    var name = sheets[i].getName().toLowerCase();
+    if (name.indexOf("재고") !== -1 || name.indexOf("인벤토리") !== -1 || 
+        name.indexOf("물품") !== -1 || name.indexOf("관리") !== -1 || 
+        name.indexOf("품목") !== -1 || name.indexOf("inventory") !== -1) {
+      return sheets[i];
+    }
+  }
+  
+  // 5. 첫 번째 시트 반환
+  if (sheets.length > 0) {
+    return sheets[0];
+  }
+  return null;
+}
 
 function doGet(e) {
   try {
     const action = e && e.parameter && e.parameter.action;
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = ss.getSheetByName(INVENTORY_SHEET_NAME);
+    const sheet = getInventorySheet(ss);
     if (!sheet) {
-      return responseJSON({ success: false, error: "시트 '" + INVENTORY_SHEET_NAME + "'를 찾을 수 없습니다." });
+      return responseJSON({ success: false, error: "스프레드시트에서 데이터를 저장/조회할 시트 탭을 찾을 수 없습니다. 시트가 비어있는지 확인하세요." });
     }
     
     // 대여/반납 외부인용 웹 신청 폼 (파라미터가 없거나 action이 비어있으면 이 HTML 페이지를 띄워줍니다)
@@ -69,9 +106,9 @@ function doPost(e) {
     const action = requestData.action;
     const payload = requestData.payload;
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = ss.getSheetByName(INVENTORY_SHEET_NAME);
+    const sheet = getInventorySheet(ss);
     if (!sheet) {
-      return responseJSON({ success: false, error: "시트 '" + INVENTORY_SHEET_NAME + "'를 찾을 수 없습니다." });
+      return responseJSON({ success: false, error: "스프레드시트에서 데이터를 저장/조회할 시트 탭을 찾을 수 없습니다. 시트가 비어있는지 확인하세요." });
     }
     
     if (action === "addInventoryItem") {
@@ -115,8 +152,8 @@ function doPost(e) {
         defectSheet = ss.insertSheet(DEFECT_SHEET_NAME);
         defectSheet.getRange(1, 1, 1, 7).setValues([["제품명", "개수", "기록 시간", "불량 유형", "세부 사항", "대처 방안", "사진"]]);
       }
-      const newRowIndex = addDefectLog(defectSheet, payload);
-      return responseJSON({ success: true, rowIndex: newRowIndex });
+      const result = addDefectLog(defectSheet, payload);
+      return responseJSON({ success: true, rowIndex: result.rowIndex, photo: result.photo });
     }
 
     if (action === "rentInventoryItem") {
@@ -341,7 +378,22 @@ function uploadImageToDrive(photoVal, fileName, folderId, fallbackFolderName) {
 
     const fullFilename = fileName + "." + ext;
     const blob = Utilities.newBlob(decoded, mimeType, fullFilename);
-    const file = folder.createFile(blob);
+    
+    let file;
+    try {
+      if (!folder) throw new Error("Folder is null");
+      file = folder.createFile(blob);
+    } catch (createErr) {
+      // If folderId is invalid, deleted, or not a real folder (e.g., throwing parent.mimeType exception),
+      // we fallback to creating/locating the fallback folder.
+      const folders = DriveApp.getFoldersByName(fallbackFolderName);
+      if (folders.hasNext()) {
+        folder = folders.next();
+      } else {
+        folder = DriveApp.createFolder(fallbackFolderName);
+      }
+      file = folder.createFile(blob);
+    }
     
     try {
       file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
@@ -394,7 +446,7 @@ function addDefectLog(sheet, log) {
   ];
   
   sheet.getRange(nextRow, 1, 1, 7).setValues([rowValues]);
-  return nextRow;
+  return { rowIndex: nextRow, photo: photoVal };
 }
 
 function getRobotObjects(ss) {
@@ -665,8 +717,8 @@ function serveExternalForm(ss, sheet) {
 function handleExternalFormSubmit(payload) {
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = ss.getSheetByName(INVENTORY_SHEET_NAME);
-    if (!sheet) throw new Error("시트 '" + INVENTORY_SHEET_NAME + "'를 찾을 수 없습니다.");
+    const sheet = getInventorySheet(ss);
+    if (!sheet) throw new Error("스프레드시트에서 데이터를 저장/조회할 시트 탭을 찾을 수 없습니다. 시트가 비어있는지 확인하세요.");
     
     let rentSheet = ss.getSheetByName(RENT_SHEET_NAME);
     if (!rentSheet) {

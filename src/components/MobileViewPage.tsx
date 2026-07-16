@@ -20,7 +20,7 @@ import {
   Camera,
   Upload,
 } from "lucide-react";
-import { getGoogleDriveImageUrl, isFuzzyMatch, formatTimestampLocal } from "../utils/drive";
+import { getGoogleDriveImageUrl, isFuzzyMatch, formatTimestampLocal, resizeAndCompressImage } from "../utils/drive";
 import { parseDateString, compareDatesDescending } from "../utils/date";
 
 interface MobileViewPageProps {
@@ -120,22 +120,15 @@ export default function MobileViewPage({
   const [isRegUploadingImage, setIsRegUploadingImage] = useState(false);
   const [isDefUploadingImage, setIsDefUploadingImage] = useState(false);
 
-  const readAsBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = (err) => reject(err);
-      reader.readAsDataURL(file);
-    });
-  };
-
   const handleRegPhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
       setIsRegUploadingImage(true);
-      const base64 = await readAsBase64(file);
-      setRegPhoto(base64);
+      // Automatically resize to max 1200px width/height and compress to 0.75 JPEG quality
+      // This prevents payload limit or timeout errors during sync
+      const compressedBase64 = await resizeAndCompressImage(file, 1200, 1200, 0.75);
+      setRegPhoto(compressedBase64);
     } catch (err: any) {
       notify("이미지 로드 실패: " + err.message, "error");
     } finally {
@@ -148,8 +141,10 @@ export default function MobileViewPage({
     if (!file) return;
     try {
       setIsDefUploadingImage(true);
-      const base64 = await readAsBase64(file);
-      setDefPhoto(base64);
+      // Automatically resize to max 1200px width/height and compress to 0.75 JPEG quality
+      // This prevents payload limit or timeout errors during sync
+      const compressedBase64 = await resizeAndCompressImage(file, 1200, 1200, 0.75);
+      setDefPhoto(compressedBase64);
     } catch (err: any) {
       notify("이미지 로드 실패: " + err.message, "error");
     } finally {
@@ -158,11 +153,30 @@ export default function MobileViewPage({
   };
 
   // --- 인라인 품목 수정(edit-inventory) 폼 상태 (Admin 전용) ---
+  const [editName, setEditName] = useState("");
+  const [editLocation, setEditLocation] = useState("");
+  const [editLink, setEditLink] = useState("");
+  const [editPhoto, setEditPhoto] = useState("");
   const [editStock, setEditStock] = useState<string>("0");
   const [editSpec, setEditSpec] = useState("");
   const [editNote, setEditNote] = useState("");
   const [editManager, setEditManager] = useState(defaultManagerName);
   const [editSubmitting, setEditSubmitting] = useState(false);
+  const [isEditUploadingImage, setIsEditUploadingImage] = useState(false);
+
+  const handleEditPhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setIsEditUploadingImage(true);
+      const compressedBase64 = await resizeAndCompressImage(file, 1200, 1200, 0.75);
+      setEditPhoto(compressedBase64);
+    } catch (err: any) {
+      notify("이미지 로드 실패: " + err.message, "error");
+    } finally {
+      setIsEditUploadingImage(false);
+    }
+  };
 
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [localToast, setLocalToast] = useState<{ msg: string; type: "ok" | "error" | "warn" } | null>(null);
@@ -521,6 +535,10 @@ export default function MobileViewPage({
 
       const updatedItem: Omit<InventoryItem, "rowIndex"> & { rowIndex?: number } = {
         ...selectedItem,
+        name: editName.trim(),
+        location: editLocation.trim(),
+        link: editLink.trim() || "N/A",
+        photo: editPhoto.trim(),
         stock: numericStock,
         spec: editSpec.trim(),
         note: editNote.trim(),
@@ -530,7 +548,7 @@ export default function MobileViewPage({
 
       if (onSaveInventoryItem) {
         await onSaveInventoryItem(updatedItem);
-        notify(`${selectedItem.name} 정보가 성공적으로 수정되었습니다.`, "ok");
+        notify(`${editName} 정보가 성공적으로 수정되었습니다.`, "ok");
         closeSheet();
       } else {
         notify("수정 처리 핸들러가 연결되지 않았습니다.", "error");
@@ -545,6 +563,10 @@ export default function MobileViewPage({
   // 4. 인라인 수정 활성화할 때 상태 세팅
   const openEditInventory = () => {
     if (!selectedItem) return;
+    setEditName(selectedItem.name || "");
+    setEditLocation(selectedItem.location || "");
+    setEditLink(selectedItem.link || "N/A");
+    setEditPhoto(selectedItem.photo || "");
     setEditStock(selectedItem.stock === null ? "" : String(selectedItem.stock));
     setEditSpec(selectedItem.spec || "");
     setEditNote(selectedItem.note || "");
@@ -1999,6 +2021,250 @@ export default function MobileViewPage({
                   >
                     {mode === "대여" ? "📥 대여하기" : "🔄 반납하기"}
                   </button>
+
+                  {isAdmin && (
+                    <button
+                      className="mvp-btn"
+                      onClick={openEditInventory}
+                      style={{
+                        width: "100%",
+                        background: isLightMode ? "#e2e8f0" : "#1e293b",
+                        color: TEXT_MAIN,
+                        borderRadius: "14px",
+                        padding: "13px",
+                        fontSize: "14px",
+                        fontWeight: 700,
+                        marginTop: "10px",
+                        border: `1px solid ${BORDER}`,
+                        boxShadow: "0 4px 12px rgba(0,0,0,0.05)",
+                      }}
+                    >
+                      ✏️ 기존 물품 정보 수정 (관리자)
+                    </button>
+                  )}
+                </>
+              ) : sheetMode === "edit-inventory" ? (
+                <>
+                  {/* ===== 기존 물품 정보 수정 폼 ===== */}
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "16px" }}>
+                    <button
+                      className="mvp-btn"
+                      type="button"
+                      onClick={backToDetail}
+                      style={{
+                        width: "32px",
+                        height: "32px",
+                        borderRadius: "10px",
+                        background: isLightMode ? "#f1f5f9" : "#1e293b",
+                        color: TEXT_MAIN,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <ArrowLeft size={16} />
+                    </button>
+                    <h2 style={{ fontSize: "17px", fontWeight: 800, color: AMBER, margin: 0 }}>
+                      ✏️ 기존 물품 정보 수정 (관리자)
+                    </h2>
+                  </div>
+
+                  {/* 물품 사진 촬영 / 업로드 */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "14px" }}>
+                    <label style={{ fontSize: "11.5px", fontWeight: 700, color: TEXT_DIM }}>물품 이미지 직접 촬영 / 업로드</label>
+                    <div
+                      style={{
+                        border: `1px dashed ${BORDER}`,
+                        borderRadius: "12px",
+                        padding: "12px",
+                        textAlign: "center",
+                        background: isLightMode ? "#f8fafc" : "rgba(255, 255, 255, 0.02)",
+                        cursor: "pointer",
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        gap: "6px",
+                        marginTop: "4px"
+                      }}
+                      onClick={() => document.getElementById("mobile-edit-photo-upload")?.click()}
+                    >
+                      <input
+                        type="file"
+                        id="mobile-edit-photo-upload"
+                        accept="image/*"
+                        style={{ display: "none" }}
+                        onChange={handleEditPhotoChange}
+                      />
+                      {editPhoto ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: "10px", width: "100%", justifyContent: "center" }}>
+                          <img
+                            src={editPhoto.startsWith("data:image/") ? editPhoto : getGoogleDriveImageUrl(editPhoto)}
+                            alt="Edit Preview"
+                            style={{ width: "38px", height: "38px", borderRadius: "6px", objectFit: "cover" }}
+                          />
+                          <div style={{ textAlign: "left" }}>
+                            <span style={{ fontSize: "12px", fontWeight: 700, color: AMBER, display: "block" }}>
+                              📸 물품 이미지 선택됨
+                            </span>
+                            <span style={{ fontSize: "10px", color: TEXT_DIM, display: "block" }}>
+                              저장 시 구글 드라이브에 자동 업로드됩니다.
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            className="mvp-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditPhoto("");
+                            }}
+                            style={{
+                              marginLeft: "auto",
+                              background: "rgba(239, 68, 68, 0.15)",
+                              color: "#ef4444",
+                              border: "none",
+                              borderRadius: "6px",
+                              padding: "4px 8px",
+                              fontSize: "11px",
+                              fontWeight: 700
+                            }}
+                          >
+                            삭제
+                          </button>
+                        </div>
+                      ) : isEditUploadingImage ? (
+                        <span style={{ fontSize: "12px", color: TEXT_DIM }}>이미지 로드 중...</span>
+                      ) : (
+                        <>
+                          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                            <Camera size={16} style={{ color: TEXT_DIM }} />
+                            <span style={{ fontSize: "12.5px", fontWeight: 700, color: TEXT_MAIN }}>이미지 직접 찍기 / 파일 업로드</span>
+                          </div>
+                          <span style={{ fontSize: "10px", color: TEXT_DIM }}>
+                            (구글 드라이브 폴더에 업로드되어 실시간 연동됩니다)
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  <form onSubmit={handleEditInventorySubmit} style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+                    {/* 품목명 */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                      <label style={{ fontSize: "11.5px", fontWeight: 700, color: TEXT_DIM }}>품목명 <span style={{ color: DANGER }}>*</span></label>
+                      <input
+                        className="mvp-input"
+                        type="text"
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        style={inputBaseStyle}
+                        required
+                      />
+                    </div>
+
+                    {/* 위치 */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                      <label style={{ fontSize: "11.5px", fontWeight: 700, color: TEXT_DIM }}>보관 위치 (예: A-01) <span style={{ color: DANGER }}>*</span></label>
+                      <input
+                        className="mvp-input"
+                        type="text"
+                        value={editLocation}
+                        onChange={(e) => setEditLocation(e.target.value)}
+                        style={inputBaseStyle}
+                        required
+                      />
+                    </div>
+
+                    {/* 규격/설명 (Spec) */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                      <label style={{ fontSize: "11.5px", fontWeight: 700, color: TEXT_DIM }}>규격 / 서브카테고리</label>
+                      <input
+                        className="mvp-input"
+                        type="text"
+                        value={editSpec}
+                        onChange={(e) => setEditSpec(e.target.value)}
+                        style={inputBaseStyle}
+                        placeholder="예: i7, 16GB, 256GB"
+                      />
+                    </div>
+
+                    {/* 재고수량 */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                      <label style={{ fontSize: "11.5px", fontWeight: 700, color: TEXT_DIM }}>현재고 수량 (숫자 또는 N/A) <span style={{ color: DANGER }}>*</span></label>
+                      <input
+                        className="mvp-input"
+                        type="text"
+                        value={editStock}
+                        onChange={(e) => setEditStock(e.target.value)}
+                        style={inputBaseStyle}
+                        placeholder="예: 5 또는 N/A"
+                        required
+                      />
+                    </div>
+
+                    {/* 링크 */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                      <label style={{ fontSize: "11.5px", fontWeight: 700, color: TEXT_DIM }}>연결 링크 (N/A 또는 URL)</label>
+                      <input
+                        className="mvp-input"
+                        type="text"
+                        value={editLink}
+                        onChange={(e) => setEditLink(e.target.value)}
+                        style={inputBaseStyle}
+                        placeholder="N/A"
+                      />
+                    </div>
+
+                    {/* 담당자 */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                      <label style={{ fontSize: "11.5px", fontWeight: 700, color: TEXT_DIM }}>수정 담당 관리자 <span style={{ color: DANGER }}>*</span></label>
+                      <input
+                        className="mvp-input"
+                        type="text"
+                        value={editManager}
+                        onChange={(e) => setEditManager(e.target.value)}
+                        style={inputBaseStyle}
+                        required
+                      />
+                    </div>
+
+                    {/* 비고 (Note) */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                      <label style={{ fontSize: "11.5px", fontWeight: 700, color: TEXT_DIM }}>비고 / 특이사항</label>
+                      <textarea
+                        className="mvp-input"
+                        value={editNote}
+                        onChange={(e) => setEditNote(e.target.value)}
+                        style={{ ...inputBaseStyle, minHeight: "80px", resize: "none" }}
+                        placeholder="특이사항 입력"
+                      />
+                    </div>
+
+                    {/* 제출 버튼 */}
+                    <button
+                      type="submit"
+                      className="mvp-btn"
+                      disabled={editSubmitting || isEditUploadingImage}
+                      style={{
+                        width: "100%",
+                        background: AMBER,
+                        color: "#ffffff",
+                        borderRadius: "14px",
+                        padding: "15px",
+                        fontSize: "15px",
+                        fontWeight: 800,
+                        opacity: editSubmitting || isEditUploadingImage ? 0.6 : 1,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "6px",
+                        marginTop: "8px",
+                        boxShadow: "0 8px 20px rgba(245,158,11,0.25)",
+                      }}
+                    >
+                      <Check size={17} />
+                      {editSubmitting ? "실시간 연동 저장 중..." : "✏️ 품목 정보 수정 완료"}
+                    </button>
+                  </form>
                 </>
               ) : (
                 <>
