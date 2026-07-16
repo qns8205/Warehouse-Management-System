@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
-import { InventoryItem, RentLog, DefectLog, Rack } from "../types";
+import { InventoryItem, RentLog, DefectLog, Rack, WmsUser } from "../types";
 import {
   ArrowLeft,
   Search,
@@ -29,6 +29,7 @@ interface MobileViewPageProps {
   defectLogs?: DefectLog[];
   racks?: Rack[];
   isAdmin?: boolean;
+  currentUser?: WmsUser | null;
   onAddRentLog: (log: RentLog) => Promise<void>;
   onAddDefectLog?: (log: Omit<DefectLog, "rowIndex">) => Promise<void>;
   onSaveInventoryItem?: (item: Omit<InventoryItem, "rowIndex"> & { rowIndex?: number }) => Promise<void>;
@@ -63,6 +64,7 @@ export default function MobileViewPage({
   defectLogs = [],
   racks = [],
   isAdmin = false,
+  currentUser = null,
   onAddRentLog,
   onAddDefectLog,
   onSaveInventoryItem,
@@ -84,6 +86,9 @@ export default function MobileViewPage({
   const [formNote, setFormNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  // Current logged in user name or default
+  const defaultManagerName = currentUser ? (currentUser.name || currentUser.id) : "관리자";
+
   // --- 모바일 품목 등록(등록 탭) 폼 상태 ---
   const [regName, setRegName] = useState("");
   const [regRackId, setRegRackId] = useState(racks[0]?.id || "");
@@ -92,7 +97,7 @@ export default function MobileViewPage({
   const [regIsCustomLoc, setRegIsCustomLoc] = useState(false);
   const [regSpec, setRegSpec] = useState("");
   const [regStock, setRegStock] = useState<string>("0");
-  const [regManager, setRegManager] = useState("관리자");
+  const [regManager, setRegManager] = useState(defaultManagerName);
   const [regNote, setRegNote] = useState("");
   const [regPhoto, setRegPhoto] = useState("");
   const [regLink, setRegLink] = useState("N/A");
@@ -105,7 +110,7 @@ export default function MobileViewPage({
   const [defCustomLoc, setDefCustomLoc] = useState("");
   const [defQty, setDefQty] = useState(1);
   const [defType, setDefType] = useState("파손");
-  const [defManager, setDefManager] = useState("관리자");
+  const [defManager, setDefManager] = useState(defaultManagerName);
   const [defNote, setDefNote] = useState("");
   const [defActionTaken, setDefActionTaken] = useState("폐기 대기");
   const [defPhoto, setDefPhoto] = useState("");
@@ -156,7 +161,7 @@ export default function MobileViewPage({
   const [editStock, setEditStock] = useState<string>("0");
   const [editSpec, setEditSpec] = useState("");
   const [editNote, setEditNote] = useState("");
-  const [editManager, setEditManager] = useState("관리자");
+  const [editManager, setEditManager] = useState(defaultManagerName);
   const [editSubmitting, setEditSubmitting] = useState(false);
 
   const [lightbox, setLightbox] = useState<string | null>(null);
@@ -169,6 +174,16 @@ export default function MobileViewPage({
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setLocalToast(null), 2400);
   };
+
+  // Sync manager states when currentUser changes
+  useEffect(() => {
+    if (currentUser) {
+      const name = currentUser.name || currentUser.id;
+      setRegManager(name);
+      setDefManager(name);
+      setEditManager(name);
+    }
+  }, [currentUser]);
 
   useEffect(() => {
     return () => {
@@ -533,7 +548,7 @@ export default function MobileViewPage({
     setEditStock(selectedItem.stock === null ? "" : String(selectedItem.stock));
     setEditSpec(selectedItem.spec || "");
     setEditNote(selectedItem.note || "");
-    setEditManager(selectedItem.manager || "관리자");
+    setEditManager(selectedItem.manager && selectedItem.manager !== "관리자" ? selectedItem.manager : defaultManagerName);
     setSheetMode("edit-inventory");
   };
 

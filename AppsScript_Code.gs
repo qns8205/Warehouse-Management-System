@@ -316,6 +316,49 @@ function getDefectLogs(sheet) {
   return logs;
 }
 
+function uploadImageToDrive(photoVal, fileName, folderId, fallbackFolderName) {
+  if (!photoVal || String(photoVal).indexOf("data:image/") !== 0) {
+    return photoVal || "";
+  }
+  try {
+    const parts = photoVal.split(",");
+    const mimeType = parts[0].split(";")[0].split(":")[1];
+    const base64Data = parts[1];
+    const decoded = Utilities.base64Decode(base64Data);
+    const ext = mimeType.split("/")[1] || "jpeg";
+    
+    let folder;
+    try {
+      folder = DriveApp.getFolderById(folderId);
+    } catch (fErr) {
+      const folders = DriveApp.getFoldersByName(fallbackFolderName);
+      if (folders.hasNext()) {
+        folder = folders.next();
+      } else {
+        folder = DriveApp.createFolder(fallbackFolderName);
+      }
+    }
+
+    const fullFilename = fileName + "." + ext;
+    const blob = Utilities.newBlob(decoded, mimeType, fullFilename);
+    const file = folder.createFile(blob);
+    
+    try {
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    } catch (shareErr) {
+      try {
+        file.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW);
+      } catch (domainShareErr) {
+        // Keep private if locked down
+      }
+    }
+    
+    return "https://lh3.googleusercontent.com/d/" + file.getId();
+  } catch (e) {
+    return "업로드 실패: " + e.toString();
+  }
+}
+
 function addDefectLog(sheet, log) {
   const lastRow = sheet.getLastRow();
   const nextRow = lastRow + 1;
@@ -327,52 +370,15 @@ function addDefectLog(sheet, log) {
   // Use original log name exactly as-is (parentheses processing is removed)
   let pName = String(log.name || "알수없음").trim();
   
+  // Determine file name format: "제품명_기록 시간_불량 유형"
+  const pType = String(log.defectType || "기타불량").trim();
+  const rawTs = String(log.timestamp || formatDate(new Date())).replace(/'/g, "").trim();
+  const safeTs = rawTs.replace(/[:\/]/g, "-");
+  const filename = pName + "_" + safeTs + "_" + pType;
+
   let photoVal = log.photo || "";
   if (photoVal.indexOf("data:image/") === 0) {
-    try {
-      const parts = photoVal.split(",");
-      const mimeType = parts[0].split(";")[0].split(":")[1];
-      const base64Data = parts[1];
-      const decoded = Utilities.base64Decode(base64Data);
-      const ext = mimeType.split("/")[1] || "jpeg";
-      
-      // Determine folder
-      let folder;
-      try {
-        folder = DriveApp.getFolderById("1gs7NcJWgFY37OZ4aEuG6Z-PNlmAfz6_R");
-      } catch (fErr) {
-        const folders = DriveApp.getFoldersByName("Image for Broken Item");
-        if (folders.hasNext()) {
-          folder = folders.next();
-        } else {
-          folder = DriveApp.createFolder("Image for Broken Item");
-        }
-      }
-
-      // Rename file format: "제품명_기록 시간_불량 유형"
-      const pType = String(log.defectType || "기타불량").trim();
-      const rawTs = String(log.timestamp || formatDate(new Date())).replace(/'/g, "").trim();
-      const safeTs = rawTs.replace(/[:\/]/g, "-");
-      const filename = pName + "_" + safeTs + "_" + pType + "." + ext;
-
-      const blob = Utilities.newBlob(decoded, mimeType, filename);
-      const file = folder.createFile(blob);
-      
-      // Cascading setSharing: handles corporate security policies restricting public links
-      try {
-        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-      } catch (shareErr) {
-        try {
-          file.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW);
-        } catch (domainShareErr) {
-          // Keep private to the owner if sharing is completely locked down
-        }
-      }
-      
-      photoVal = "https://lh3.googleusercontent.com/d/" + file.getId();
-    } catch (e) {
-      photoVal = "업로드 실패: 구글 드라이브 접근 권한이 필요합니다. Apps Script 에디터 우측 상단 '실행(Run)'을 1회 실행하여 권한 승인을 완료해 주세요. (상세 오류: " + e.toString() + ")";
-    }
+    photoVal = uploadImageToDrive(photoVal, filename, "1gs7NcJWgFY37OZ4aEuG6Z-PNlmAfz6_R", "Image for Broken Item");
   }
   
   const nowStr = formatDate(new Date());
@@ -518,6 +524,13 @@ function addInventoryItem(sheet, item) {
     ? "N/A" 
     : (item.stock === "" || item.stock == null ? "" : Number(item.stock));
 
+  // 물품 등록 이미지 드라이브 업로드 처리 (이름은 오브젝트 이름으로 지정, 폴더 ID: 1B8VRL7T9cuQIuiSU08ToZnJis576z_wY)
+  let photoVal = item.photo || "";
+  if (photoVal.indexOf("data:image/") === 0) {
+    const fileName = String(item.name || "물품이미지").trim();
+    photoVal = uploadImageToDrive(photoVal, fileName, "1B8VRL7T9cuQIuiSU08ToZnJis576z_wY", "Inventory Images");
+  }
+
   const rowValues = [
     item.location || "",
     item.spec || "", // Column B (서브 분류)
@@ -527,7 +540,7 @@ function addInventoryItem(sheet, item) {
     nowStr,
     item.manager || "",
     item.note || "",
-    item.photo || "" // Column I (사진 링크용)
+    photoVal // Column I (사진 링크용)
   ];
   
   sheet.getRange(nextRow, 1, 1, 9).setValues([rowValues]);
@@ -545,7 +558,13 @@ function updateInventoryItem(sheet, item) {
   if (item.location !== undefined) currentValues[0] = item.location;
   if (item.spec !== undefined) currentValues[1] = item.spec; // Column B (서브 분류)
   if (item.photo !== undefined) {
-    currentValues[8] = item.photo; // Column I (사진 링크용)만 업데이트합니다.
+    // 물품 수정 이미지 드라이브 업로드 처리 (이름은 오브젝트 이름으로 지정, 폴더 ID: 1B8VRL7T9cuQIuiSU08ToZnJis576z_wY)
+    let photoVal = item.photo || "";
+    if (photoVal.indexOf("data:image/") === 0) {
+      const fileName = String(item.name || currentValues[2] || "물품이미지").trim();
+      photoVal = uploadImageToDrive(photoVal, fileName, "1B8VRL7T9cuQIuiSU08ToZnJis576z_wY", "Inventory Images");
+    }
+    currentValues[8] = photoVal; // Column I (사진 링크용)만 업데이트합니다.
   }
   if (item.name !== undefined) currentValues[2] = item.name;
   if (item.link !== undefined) currentValues[3] = item.link;

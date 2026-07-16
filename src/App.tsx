@@ -1405,6 +1405,7 @@ export default function App() {
         defectLogs={defectLogs}
         racks={racks}
         isAdmin={isAdmin}
+        currentUser={currentUser}
         onAddRentLog={handleAddRentLog}
         onAddDefectLog={handleAddDefectLog}
         onSaveInventoryItem={saveInventoryItem}
